@@ -44,11 +44,16 @@ MASTER = "資格マスタ"
 GATHER = "資格集約"
 CALC = "計算"
 CALC_FIRST_ROW = 3
+PASTE = "資格取込"
+PASTE_FIRST_ROW = 6      # 貼り付けを始める行
+PASTE_ROWS = 200         # 貼り付けられる件数
+IMPORT_SLOTS = 6         # 1人が取り込める件数
 GUIDE = "使い方"
 
 ROSTER_FIRST_ROW = 5      # 生徒1人目の行
 STUDENTS = 40             # 履歴書シートの枚数
 LICENSE_SLOTS = 6         # 「入力」シートの資格の枠数
+GATHER_SLOTS = 12         # 資格集約の1人分の行数（手入力6＋取込6）
 LICENSE_ROWS_ON_FORM = 5  # 用紙の資格欄の行数
 GATHER_FIRST_ROW = 3
 
@@ -200,6 +205,15 @@ def build_roster(wb, students: list[dict] | None) -> None:
         course_dv.add(ws.cell(row=row, column=cols.index(next(c for c in cols if c.key == "course")) + 1))
         ws.row_dimensions[row].height = 22
 
+    match_col = roster_col_match()
+    ws[f"{match_col}3"] = "照合用（自動）"
+    ws[f"{match_col}3"].font = Font(size=8, color="999999")
+    for r in range(STUDENTS):
+        row = ROSTER_FIRST_ROW + r
+        ws[f"{match_col}{row}"] = (
+            f'=SUBSTITUTE(SUBSTITUTE({roster_col("name")}{row}," ",""),"　","")'
+        )
+    ws.column_dimensions[match_col].hidden = True
     ws.freeze_panes = ws.cell(row=ROSTER_FIRST_ROW, column=5)
 
 
@@ -287,6 +301,22 @@ def build_master(wb) -> None:
     ws.freeze_panes = "A3"
 
 
+def _gather_common(ws, row: int, top: int, bottom: int) -> None:
+    """資格集約の共通列（正式名称・並び順・順位・表示）。"""
+    ws.cell(row=row, column=5,
+            value=f'=IF(D{row}="","",IFERROR(VLOOKUP(D{row},{MASTER}!$A:$B,2,FALSE),D{row}))')
+    ws.cell(row=row, column=6, value=f'=IF(E{row}="","",IF(C{row}="",DATE(9999,1,1),C{row}))')
+    ws.cell(row=row, column=7, value=(
+        f'=IF(E{row}="","",COUNTIFS($F${top}:$F${bottom},"<"&F{row},'
+        f'$F${top}:$F${bottom},"<>")+COUNTIFS($F${top}:$F${bottom},F{row},'
+        f'$B${top}:$B${bottom},"<"&B{row})+1)'))
+    ws.cell(row=row, column=8, value=(
+        f'=IF(OR(E{row}="",C{row}=""),"",'
+        f'IF(C{row}>=DATE(2019,5,1),"令和"&(YEAR(C{row})-2018),'
+        f'IF(C{row}>=DATE(1989,1,8),"平成"&(YEAR(C{row})-1988),'
+        f'"昭和"&(YEAR(C{row})-1925)))&"年"&MONTH(C{row})&"月")'))
+
+
 def build_gather(wb) -> None:
     """資格を「取得年月順」に並べ替えるための下ごしらえシート。"""
     ws = wb.create_sheet(GATHER)
@@ -299,37 +329,184 @@ def build_gather(wb) -> None:
     name_cols = [roster_col(f"license.{k}.name") for k in range(1, LICENSE_SLOTS + 1)]
     ym_cols = [roster_col(f"license.{k}.ym") for k in range(1, LICENSE_SLOTS + 1)]
 
+    paste_first, paste_last = PASTE_FIRST_ROW, PASTE_FIRST_ROW + PASTE_ROWS - 1
     for i in range(1, STUDENTS + 1):
         r = ROSTER_FIRST_ROW + i - 1
-        top = GATHER_FIRST_ROW + (i - 1) * LICENSE_SLOTS
-        bottom = top + LICENSE_SLOTS - 1
-        for k in range(1, LICENSE_SLOTS + 1):
+        top = GATHER_FIRST_ROW + (i - 1) * GATHER_SLOTS
+        bottom = top + GATHER_SLOTS - 1
+        for k in range(1, GATHER_SLOTS + 1):
             row = top + k - 1
             ws.cell(row=row, column=1, value=i)
             ws.cell(row=row, column=2, value=k)
+            if k > LICENSE_SLOTS:   # 資格取込から取り込む分
+                j = k - LICENSE_SLOTS
+                key = f'{i}&"_"&{j}'
+                pos = f'MATCH({key},{PASTE}!$Z${paste_first}:$Z${paste_last},0)'
+                ws.cell(row=row, column=3, value=(
+                    f'=IFERROR(INDEX({PASTE}!$S${paste_first}:$S${paste_last},{pos}),"")'))
+                ws.cell(row=row, column=4, value=(
+                    f'=IFERROR(INDEX({PASTE}!$R${paste_first}:$R${paste_last},{pos}),"")'))
+                _gather_common(ws, row, top, bottom)
+                continue
             ws.cell(row=row, column=3, value=(
                 f'=IFERROR(IF(ISNUMBER({ROSTER}!{ym_cols[k-1]}{r}),{ROSTER}!{ym_cols[k-1]}{r},'
                 f'DATEVALUE({ROSTER}!{ym_cols[k-1]}{r})),"")'))
             ws.cell(row=row, column=4, value=f'=IF({ROSTER}!{name_cols[k-1]}{r}="","",{ROSTER}!{name_cols[k-1]}{r})')
-            ws.cell(row=row, column=5,
-                    value=f'=IF(D{row}="","",IFERROR(VLOOKUP(D{row},{MASTER}!$A:$B,2,FALSE),D{row}))')
-            ws.cell(row=row, column=6, value=f'=IF(E{row}="","",IF(C{row}="",DATE(9999,1,1),C{row}))')
-            ws.cell(
-                row=row, column=7,
-                value=(f'=IF(E{row}="","",COUNTIFS($F${top}:$F${bottom},"<"&F{row},'
-                       f'$F${top}:$F${bottom},"<>")+COUNTIFS($F${top}:$F${bottom},F{row},'
-                       f'$B${top}:$B${bottom},"<"&B{row})+1)'),
-            )
-            ws.cell(row=row, column=8, value=(
-                f'=IF(OR(E{row}="",C{row}=""),"",'
-                f'IF(C{row}>=DATE(2019,5,1),"令和"&(YEAR(C{row})-2018),'
-                f'IF(C{row}>=DATE(1989,1,8),"平成"&(YEAR(C{row})-1988),'
-                f'"昭和"&(YEAR(C{row})-1925)))&"年"&MONTH(C{row})&"月")'
-            ))
+            _gather_common(ws, row, top, bottom)
         ws.cell(row=top, column=3).number_format = "yyyy/mm/dd"
     for col, width in (("A", 8), ("B", 6), ("C", 12), ("D", 30), ("E", 30), ("F", 12), ("G", 8), ("H", 14)):
         ws.column_dimensions[col].width = width
     ws.sheet_state = "hidden"
+
+
+def build_paste(wb, paste_lines: list[str] | None = None) -> None:
+    """「資格取込」シート: 貼り付けた資格一覧を数式で自動的に振り分ける。"""
+    ws = wb.create_sheet(PASTE)
+    first, last = PASTE_FIRST_ROW, PASTE_FIRST_ROW + PASTE_ROWS - 1
+    input_fill = PatternFill("solid", fgColor="FFFDE7")
+    small = Font(size=9, color="666666")
+
+    ws["A1"] = "資格取込（1行＝1件で貼り付けてください）"
+    ws["A1"].font = Font(size=12, bold=True)
+    ws["A2"] = (
+        f"A{first} 以降に、資格取得の一覧をそのまま貼り付けます。"
+        "「入力」シートの名簿と照合して、各生徒の資格欄に自動で追加します。"
+    )
+    ws["A2"].font = small
+    ws["A3"] = (
+        "書式: 3-2-15〔空白またはタブ〕山田太郎 基礎製図検定 令和6年7月10日"
+        "　…学年-組-出席番号 → 氏名 → 資格名 → 取得日 の順。"
+    )
+    ws["A3"].font = small
+    ws["A4"] = (
+        "先頭の番号がないときは氏名で照合します。取得日は 令和6年7月10日 / 2024/7/10 のどちらでも。"
+        "すでに「入力」シートに手入力してある資格と同じものは「重複」として飛ばします。"
+    )
+    ws["A4"].font = small
+
+    headers = {
+        1: "貼付原文", 2: "整形", 3: "語数",
+        4: "語1", 5: "語2", 6: "語3", 7: "語4", 8: "語5", 9: "語6", 10: "語7", 11: "語8",
+        12: "ID", 13: "ID有", 14: "組", 15: "出席番号", 16: "氏名",
+        17: "資格名（貼付）", 18: "正式名称", 19: "取得日",
+        20: "名簿No", 21: "名簿の氏名", 22: "状態", 23: "有効", 24: "行", 25: "順位", 26: "キー",
+    }
+    for col, label in headers.items():
+        cell = ws.cell(row=first - 1, column=col, value=label)
+        cell.font = Font(size=9, bold=True)
+        cell.fill = PatternFill("solid", fgColor="E8EEF4")
+
+    name_cols = [roster_col(f"license.{k}.name") for k in range(1, LICENSE_SLOTS + 1)]
+    match_col = roster_col_match()
+
+    paste_lines = paste_lines or []
+    for row in range(first, last + 1):
+        pasted = paste_lines[row - first] if row - first < len(paste_lines) else None
+        ws.cell(row=row, column=1, value=pasted).fill = input_fill
+        raw, fmt, count = f"A{row}", f"B{row}", f"C{row}"
+        ws.cell(row=row, column=2, value=(
+            f'=TRIM(SUBSTITUTE(SUBSTITUTE(SUBSTITUTE({raw},CHAR(9)," "),"　"," "),CHAR(160)," "))'
+        ))
+        ws.cell(row=row, column=3, value=f'=IF({fmt}="",0,LEN({fmt})-LEN(SUBSTITUTE({fmt}," ",""))+1)')
+        for k in range(1, 9):   # 語1〜語8
+            ws.cell(row=row, column=3 + k, value=(
+                f'=IF({count}>={k},TRIM(MID(SUBSTITUTE({fmt}," ",REPT(" ",200)),{(k-1)*200+1},200)),"")'
+            ))
+        w = {k: f"{get_column_letter(3 + k)}{row}" for k in range(1, 9)}
+        ident, has_id = f"L{row}", f"M{row}"
+        ws.cell(row=row, column=12, value=(
+            f'=SUBSTITUTE(SUBSTITUTE(SUBSTITUTE({w[1]},"年","-"),"組","-"),"番","")'
+        ))
+        ws.cell(row=row, column=13, value=(
+            f'=IF({w[1]}="",0,IF(ISNUMBER(VALUE(SUBSTITUTE({ident},"-",""))),1,0))'
+        ))
+        ws.cell(row=row, column=14, value=(
+            f'=IF({has_id}=0,"",IFERROR(VALUE(TRIM(MID(SUBSTITUTE({ident},"-",REPT(" ",100)),101,100))),""))'
+        ))
+        ws.cell(row=row, column=15, value=(
+            f'=IF({has_id}=0,"",IFERROR(VALUE(TRIM(RIGHT(SUBSTITUTE({ident},"-",REPT(" ",100)),100))),""))'
+        ))
+        ws.cell(row=row, column=16, value=f'=IF({has_id}=1,{w[2]},{w[1]})')
+
+        start = f"IF({has_id}=1,3,2)"
+        end = f'{count}-IF(S{row}="",0,1)'   # 取得日が読めた行は、最後の語を日付として外す
+        parts = "&".join(
+            f'IF(AND({k}>={start},{k}<={end}),{w[k]}&" ","")' for k in range(2, 9)
+        )
+        ws.cell(row=row, column=17, value=f'=IF({count}<2,"",TRIM({parts}))')
+        licence = f"Q{row}"
+        ws.cell(row=row, column=18, value=(
+            f'=IF({licence}="","",IFERROR(VLOOKUP({licence},{MASTER}!$A:$B,2,FALSE),{licence}))'
+        ))
+
+        tail = f'INDEX({get_column_letter(4)}{row}:{get_column_letter(11)}{row},MIN(8,MAX(1,{count})))'
+        norm = f"AA{row}"
+        ws.cell(row=row, column=27, value=(
+            f'=SUBSTITUTE(SUBSTITUTE(SUBSTITUTE(SUBSTITUTE(SUBSTITUTE({tail},'
+            f'"年","/"),"月","/"),"日",""),"-","/"),".","/")'
+        ))
+        tok = [f'TRIM(MID(SUBSTITUTE({norm},"/",REPT(" ",50)),{k*50+1},50))' for k in range(3)]
+        era = f"LEFT({tail},2)"
+        wareki = (
+            f'DATE(VALUE(MID({tail},3,FIND("年",{tail})-3))'
+            f'+IF({era}="令和",2018,IF({era}="平成",1988,1925)),'
+            f'VALUE(MID({tail},FIND("年",{tail})+1,FIND("月",{tail})-FIND("年",{tail})-1)),'
+            f'VALUE(SUBSTITUTE(MID({tail},FIND("月",{tail})+1,10),"日","")))'
+        )
+        seireki = f'DATE(VALUE({tok[0]}),VALUE({tok[1]}),VALUE({tok[2]}))'
+        ws.cell(row=row, column=19, value=(
+            f'=IF({count}<2,"",IFERROR(IF(OR({era}="令和",{era}="平成",{era}="昭和"),'
+            f'{wareki},{seireki}),IFERROR(DATEVALUE({tail}),"")))'
+        ))
+
+        number, name = f"O{row}", f"P{row}"
+        ws.cell(row=row, column=20, value=(
+            f'=IF({fmt}="","",IFERROR(MATCH({number},{ROSTER}!$C${ROSTER_FIRST_ROW}:'
+            f'$C${ROSTER_FIRST_ROW + STUDENTS - 1},0),'
+            f'IFERROR(MATCH(SUBSTITUTE(SUBSTITUTE({name}," ",""),"　",""),'
+            f'{ROSTER}!${match_col}${ROSTER_FIRST_ROW}:${match_col}${ROSTER_FIRST_ROW + STUDENTS - 1},0),"")))'
+        ))
+        no, official, date = f"T{row}", f"R{row}", f"S{row}"
+        ws.cell(row=row, column=21, value=(
+            f'=IF({no}="","",INDEX({ROSTER}!${roster_col("name")}${ROSTER_FIRST_ROW}:'
+            f'${roster_col("name")}${ROSTER_FIRST_ROW + STUDENTS - 1},{no}))'
+        ))
+        dup_manual = "+".join(
+            f'IF(INDEX({ROSTER}!${col}${ROSTER_FIRST_ROW}:${col}${ROSTER_FIRST_ROW + STUDENTS - 1},'
+            f'{no})={official},1,0)' for col in name_cols
+        )
+        dup_paste = (
+            f'COUNTIFS($T${first}:$T${last},{no},$R${first}:$R${last},{official},'
+            f'$X${first}:$X${last},"<"&X{row})'
+        )
+        ws.cell(row=row, column=22, value=(
+            f'=IF({fmt}="","",IF({no}="","要確認（名簿と照合できません）",'
+            f'IF({official}="","要確認（資格名がありません）",'
+            f'IF({date}="","要確認（取得日が読めません）",'
+            f'IF(({dup_manual})+({dup_paste})>0,"重複","反映")))))'
+        ))
+        ws.cell(row=row, column=23, value=f'=IF(V{row}="反映",1,0)')
+        ws.cell(row=row, column=24, value=row)
+        ws.cell(row=row, column=25, value=(
+            f'=IF(W{row}=0,"",COUNTIFS($T${first}:$T${last},{no},$W${first}:$W${last},1,'
+            f'$S${first}:$S${last},"<"&{date})'
+            f'+COUNTIFS($T${first}:$T${last},{no},$W${first}:$W${last},1,'
+            f'$S${first}:$S${last},{date},$X${first}:$X${last},"<"&X{row})+1)'
+        ))
+        ws.cell(row=row, column=26, value=f'=IF(Y{row}="","",{no}&"_"&Y{row})')
+        ws.cell(row=row, column=19).number_format = "yyyy/mm/dd"
+
+    for col in (2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 23, 24, 25, 26, 27):
+        ws.column_dimensions[get_column_letter(col)].hidden = True
+    for col, width in ((1, 52), (14, 6), (15, 9), (16, 14), (17, 28), (18, 28), (19, 12),
+                       (20, 8), (21, 14), (22, 26)):
+        ws.column_dimensions[get_column_letter(col)].width = width
+    ws.freeze_panes = f"A{first}"
+
+
+def roster_col_match() -> str:
+    """「入力」シートの照合用（空白を抜いた氏名）列。"""
+    return get_column_letter(len(columns()) + 2)
 
 
 def build_guide(wb) -> None:
@@ -356,11 +533,20 @@ def build_guide(wb) -> None:
         "",
         "5. 印刷するときは、そのままシートを印刷してください（A4横・1ページに収まります）。",
         "",
+        "■ 資格をまとめて取り込む（貼り付けるだけ）",
+        "「資格取込」シートのA6以降に、資格取得の一覧を1行1件で貼り付けてください。",
+        "   例) 3-2-15〔タブ〕山田太郎 基礎製図検定 令和6年7月10日",
+        "   ・学年-組-出席番号 → 氏名 → 資格名 → 取得日 の順（区切りは空白でもタブでも可）",
+        "   ・先頭の番号がないときは氏名で照合します。",
+        "   ・「状態」の列に 反映／重複／要確認 が出るので、要確認の行だけ直してください。",
+        "   ・手入力した資格と合わせて、取得年月の古い順に並べて印字します（上から5件）。",
+        "",
         "■ 各シートの役割",
         "・入力　　　… 生徒の情報（1行＝1生徒）",
         "・設定　　　… 基準日（満○歳の計算日）、学校名、既定の学科、卒業（見込）年月",
         "・反映項目　… 履歴書に出す項目を○×で選ぶ",
         "・学科マスタ… 在籍校欄に出る学科（6種類）",
+        "・資格取込　… 資格一覧を貼り付けると、名簿と照合して自動で振り分けます",
         "・資格マスタ… 入力した資格名を正式名称に直す変換表",
         "・資格集約　… 資格を取得年月順に並べる計算用（非表示・さわらないでください）",
         "",
@@ -467,8 +653,8 @@ def build_calc(wb) -> None:
     for i in range(1, STUDENTS + 1):
         r = ROSTER_FIRST_ROW + i - 1
         row = CALC_FIRST_ROW + i - 1
-        top = GATHER_FIRST_ROW + (i - 1) * LICENSE_SLOTS
-        bottom = top + LICENSE_SLOTS - 1
+        top = GATHER_FIRST_ROW + (i - 1) * GATHER_SLOTS
+        bottom = top + GATHER_SLOTS - 1
 
         def ref(key: str) -> str:
             return f"{ROSTER}!${roster_col(key)}${r}"
@@ -541,7 +727,7 @@ def build_calc(wb) -> None:
 
 # ------------------------------------------------------------------ 組み立て
 def build(official: Path, out: Path, students: list[dict] | None = None,
-          sheets: int = STUDENTS) -> Path:
+          sheets: int = STUDENTS, paste_lines: list[str] | None = None) -> Path:
     wb = load_workbook(official)
     form = wb[FORM_SHEET_SRC]
     for name in list(wb.sheetnames):
@@ -564,11 +750,12 @@ def build(official: Path, out: Path, students: list[dict] | None = None,
     build_fields(wb)
     build_courses(wb)
     build_master(wb)
+    build_paste(wb, paste_lines)
     build_gather(wb)
     build_calc(wb)
     build_guide(wb)
 
-    order = [GUIDE, ROSTER, SETTINGS, FIELDS, COURSES, MASTER, GATHER, CALC]
+    order = [GUIDE, ROSTER, PASTE, SETTINGS, FIELDS, COURSES, MASTER, GATHER, CALC]
     wb._sheets.sort(key=lambda ws: order.index(ws.title) if ws.title in order else 100 + int(ws.title))
     wb.active = 0
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -711,7 +898,15 @@ def main(argv: list[str] | None = None) -> int:
         for s, course in zip(students, (COURSE_LIST[2], COURSE_LIST[0], COURSE_LIST[4])):
             s["course"] = course
 
-    out = build(Path(args.official), Path(args.output), students, args.sheets)
+    paste = None
+    if args.with_sample:
+        paste = [
+            "3-2-1\t佐野太郎\t計算技術検定3級\t令和6年11月15日",
+            "3-2-2 近畿花子 実用英語検定2級 2025/6/8",
+            "3-2-3 泉州一郎 危険物取扱者乙4 令和7年3月14日",
+            "3-2-2 近畿花子 色彩検定３級 令和7年7月13日",
+        ]
+    out = build(Path(args.official), Path(args.output), students, args.sheets, paste)
     print(f"作成しました: {out}")
     return 0
 
