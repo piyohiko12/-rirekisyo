@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# 出力したPDF・確認用PNG
+出力/
+*.pdf
+*.png
+!templates/*.pdf
+!samples/*.pdf
+!docs/*.png
+
+# Excelの一時ファイル
+~$*.xlsx
