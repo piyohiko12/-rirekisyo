@@ -58,10 +58,10 @@ def columns() -> list[Column]:
         Column("郵便番号", "zip", 10.0, "現住所", "5980001 でも可"),
         Column("住所", "address", 34.0, "現住所"),
         Column("ふりがな（住所）", "address_kana", 26.0, "現住所", "郵便番号から自動で入ります"),
-        Column("学科", "course", 26.0, "在籍校", "6種類から選ぶ（空欄なら設定の既定の学科）"),
         Column("連絡先 郵便番号", "contact_zip", 11.0, "連絡先", "空欄なら「同上」"),
         Column("連絡先 住所", "contact_address", 26.0, "連絡先", "空欄なら「同上」"),
-        Column("連絡先 ふりがな", "contact_kana", 20.0, "連絡先"),
+        Column("連絡先 ふりがな", "contact_kana", 20.0, "連絡先", "郵便番号から自動で入ります"),
+        Column("学科", "course", 26.0, "在籍校", "6種類から選ぶ（空欄なら設定の既定の学科）"),
     ]
     for i in range(1, MAX_LICENSE_SLOTS + 1):
         cols.append(Column(f"資格{i} 名称", f"license.{i}.name", 22.0, "資格等"))
