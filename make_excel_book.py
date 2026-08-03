@@ -570,9 +570,9 @@ def build_paste(wb, paste_lines: list[str] | None = None) -> None:
             f'DATE(VALUE(MID({tail},3,FIND("年",{tail})-3))'
             f'+IF({era}="令和",2018,IF({era}="平成",1988,1925)),'
             f'VALUE(MID({tail},FIND("年",{tail})+1,FIND("月",{tail})-FIND("年",{tail})-1)),'
-            f'VALUE(SUBSTITUTE(MID({tail},FIND("月",{tail})+1,10),"日","")))'
+            f'IFERROR(VALUE(SUBSTITUTE(MID({tail},FIND("月",{tail})+1,10),"日","")),1))'
         )
-        seireki = f'DATE(VALUE({tok[0]}),VALUE({tok[1]}),VALUE({tok[2]}))'
+        seireki = f'DATE(VALUE({tok[0]}),VALUE({tok[1]}),IFERROR(VALUE({tok[2]}),1))'
         ws.cell(row=row, column=19, value=(
             f'=IF({count}<2,"",IFERROR(IF(OR({era}="令和",{era}="平成",{era}="昭和"),'
             f'{wareki},{seireki}),IFERROR(DATEVALUE({tail}),"")))'
@@ -718,10 +718,10 @@ def macro_code() -> list[str]:
 ' ============================================================
 
 Private Const SHEET_FORM As String = "{FORM_SHEET}"
-Private Const BLOCK_ROWS As Long = {BLOCK_ROWS}      ' 1人分の行数（1ページ）
-Private Const STUDENT_COUNT As Long = {STUDENTS}     ' 名簿の人数
-Private Const MAX_PT As Double = {BODY_FONT_SIZE}    ' 基本（最大）の文字の大きさ
-Private Const MIN_PT As Double = 6                  ' これより小さくはしない
+Private Const BLOCK_ROWS As Long = {BLOCK_ROWS}          ' 1人分の行数（1ページ）
+Private Const STUDENT_COUNT As Long = {STUDENTS}         ' 名簿の人数
+Private Const MAX_PT As Double = {BODY_FONT_SIZE}        ' 基本（最大）の文字の大きさ
+Private Const MIN_PT As Double = 6           ' これより小さくはしない
 
 Public Sub 履歴書の文字を整える()
     If 文字を整える実行() Then
@@ -812,12 +812,13 @@ Private Function 文字幅(s As String) As Double
     Dim i As Long, c As Long, w As Double
     For i = 1 To Len(s)
         c = AscW(Mid$(s, i, 1))
-        If c >= 0 And c < 128 Then
-            w = w + 0.5
-        ElseIf c >= &HFF61 And c <= &HFF9F Then  ' 半角カタカナ
-            w = w + 0.5
+        If c < 0 Then c = c + 65536          ' AscWは32767を超えると負の値を返す
+        If c < 128 Then
+            w = w + 0.5                       ' 半角英数記号
+        ElseIf c >= 65377 And c <= 65439 Then
+            w = w + 0.5                       ' 半角カタカナ
         Else
-            w = w + 1
+            w = w + 1                         ' 全角
         End If
     Next i
     文字幅 = w
@@ -883,12 +884,13 @@ def build_macro_sheet(wb) -> None:
     note = Font(size=9, color="666666")
     ws["C1"] = "↓ ③で貼り付ける（この列をまるごとコピー）"
     ws["C1"].font = note
+    # 空行は " " にしておく（空文字だとセルが消え、貼り付けたときに詰まってしまう）
     for i, line in enumerate(macro_code(), start=2):
-        ws.cell(row=i, column=3, value=line).font = mono
+        ws.cell(row=i, column=3, value=line or " ").font = mono
     ws["E1"] = "↓ ◆で貼り付ける（任意・ThisWorkbook 用）"
     ws["E1"].font = note
     for i, line in enumerate(THISWORKBOOK_CODE, start=2):
-        ws.cell(row=i, column=5, value=line).font = mono
+        ws.cell(row=i, column=5, value=line or " ").font = mono
     ws.column_dimensions["A"].width = 84
     ws.column_dimensions["C"].width = 82
     ws.column_dimensions["E"].width = 56
@@ -909,6 +911,7 @@ def build_guide(wb) -> None:
         "     郵便番号では町名までしか分からないので、番地の読みが要るときは書き足してください。",
         "   ・連絡先を空欄にすると、履歴書には自動で「同上」と入ります。",
         "   ・生年月日は「2008/5/12」のように日付で入力してください（元号と満○歳は自動）。",
+        "   ・資格の取得年月は「令和6年6月」「2024/6」「2024/6/10」のどれでも読めます。",
         "",
         "2.「履歴書」シートが、そのまま印刷する用紙です（1人＝1ページ・上から入力シートのNo順）。",
         "   画面をスクロールすれば、印刷前に全員分を確認できます。",
@@ -1005,17 +1008,27 @@ def fill_form(ws, i: int, offset: int = 0, *, license_size=None) -> None:
     set_cell(ws, shift(CONTACT_KANA_CELL, offset), calc("M"), size=9, indent=1)
 
     set_cell(ws, shift(SCHOOL_CELL, offset), calc("N"), size=BODY_FONT_SIZE, wrap=True)
-    set_cell(ws, shift(GRAD_YEAR_CELL, offset), f'={SETTINGS}!$B$6&""',
+
+    # 名簿が空の行（使っていない生徒）は、日付や卒業年月も出さない
+    used = f"{CALC}!$B${row}"
+
+    def only_if_used(formula: str) -> str:
+        return f'=IF({used}="","",{formula})&""'
+
+    set_cell(ws, shift(GRAD_YEAR_CELL, offset), only_if_used(f"{SETTINGS}!$B$6"),
              align="center", size=WIDE_NUM_SIZE)
-    set_cell(ws, shift(GRAD_MONTH_CELL, offset), f'={SETTINGS}!$B$7&""',
+    set_cell(ws, shift(GRAD_MONTH_CELL, offset), only_if_used(f"{SETTINGS}!$B$7"),
              align="center", size=NARROW_NUM_SIZE)
 
     base = f"{SETTINGS}!$B$3"
-    set_cell(ws, shift(TODAY_YEAR_CELL, offset), f'=IF(N({base})=0,"",YEAR({base})-2018)&""',
+    set_cell(ws, shift(TODAY_YEAR_CELL, offset),
+             only_if_used(f'IF(N({base})=0,"",YEAR({base})-2018)'),
              align="center", size=WIDE_NUM_SIZE)
-    set_cell(ws, shift(TODAY_MONTH_CELL, offset), f'=IF(N({base})=0,"",MONTH({base}))&""',
+    set_cell(ws, shift(TODAY_MONTH_CELL, offset),
+             only_if_used(f'IF(N({base})=0,"",MONTH({base}))'),
              align="center", size=WIDE_NUM_SIZE)
-    set_cell(ws, shift(TODAY_DAY_CELL, offset), f'=IF(N({base})=0,"",DAY({base}))&""',
+    set_cell(ws, shift(TODAY_DAY_CELL, offset),
+             only_if_used(f'IF(N({base})=0,"",DAY({base}))'),
              align="center", size=NARROW_NUM_SIZE)
 
     # 資格は「取得年月」「名称」それぞれ1つの高いセルに、改行でつないで流し込む。
@@ -1102,17 +1115,18 @@ def build_form_sheet(wb, src, title: str = FORM_SHEET, *, license_size=None) -> 
 def to_date(ref: str) -> str:
     """セルを日付にする式。日付・西暦文字・和暦文字（平成10年12月20日）に対応。"""
     era = f"LEFT({ref},2)"
+    # 「日」が無い（令和6年6月）ときは1日として読む
     wareki = (
         f'DATE(VALUE(MID({ref},3,FIND("年",{ref})-3))'
         f'+IF({era}="令和",2018,IF({era}="平成",1988,IF({era}="昭和",1925,IF({era}="大正",1911,0)))),'
         f'VALUE(MID({ref},FIND("年",{ref})+1,FIND("月",{ref})-FIND("年",{ref})-1)),'
-        f'VALUE(SUBSTITUTE(MID({ref},FIND("月",{ref})+1,10),"日","")))'
+        f'IFERROR(VALUE(SUBSTITUTE(MID({ref},FIND("月",{ref})+1,10),"日","")),1))'
     )
     # 2008/5/12 や 2008-5-12、2008年5月12日 のような西暦の文字列
     norm = (f'SUBSTITUTE(SUBSTITUTE(SUBSTITUTE(SUBSTITUTE(SUBSTITUTE({ref},'
             f'"年","/"),"月","/"),"日",""),"-","/"),".","/")')
     tok = [f'TRIM(MID(SUBSTITUTE({norm},"/",REPT(" ",50)),{k * 50 + 1},50))' for k in range(3)]
-    seireki = f'DATE(VALUE({tok[0]}),VALUE({tok[1]}),VALUE({tok[2]}))'
+    seireki = f'DATE(VALUE({tok[0]}),VALUE({tok[1]}),IFERROR(VALUE({tok[2]}),1))'
     return (
         f'IF({ref}="","",IF(ISNUMBER({ref}),{ref},'
         f'IFERROR(IF(OR({era}="令和",{era}="平成",{era}="昭和",{era}="大正"),{wareki},{seireki}),'
@@ -1228,8 +1242,9 @@ def build_calc(wb) -> None:
                     for k in range(1, CALC_LICENSE_MAX + 1)]
         name_cells = [get_column_letter(CALC_LICENSE_COL + (k - 1) * 2 + 1) + str(row)
                       for k in range(1, CALC_LICENSE_MAX + 1)]
+        # 行がずれないよう、どちらの列も「名称が入っているか」で改行を決める
         join_ym = "&".join([f"${ym_cells[0]}"] + [
-            f'IF(${c}="","",CHAR(10)&${c})' for c in ym_cells[1:]])
+            f'IF(${n}="","",CHAR(10)&${c})' for c, n in zip(ym_cells[1:], name_cells[1:])])
         join_name = "&".join([f"${name_cells[0]}"] + [
             f'IF(${c}="","",CHAR(10)&${c})' for c in name_cells[1:]])
         count = "+".join(f'IF(${c}="",0,1)' for c in name_cells)
