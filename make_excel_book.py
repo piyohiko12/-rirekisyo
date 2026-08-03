@@ -105,6 +105,10 @@ JOB_MONTH_COLS = ("U", "V")
 JOB_TEXT_COLS = ("Y", "BI")
 
 FORM_FONT = "ＭＳ Ｐ明朝"
+# 用紙の数字欄はとても狭い（2列＝約16ピクセル）。大きい文字だと Excel で ### になるため、
+# 欄の幅に合わせて文字サイズを決める。
+NARROW_NUM_SIZE = 8.0    # 2列分の欄（生年の和暦・満年齢・卒業月・職歴の月・日付の日）
+WIDE_NUM_SIZE = 9.5      # 3列分の欄（生月・生日・年・月）
 
 
 # ------------------------------------------------------------------ 便利関数
@@ -758,10 +762,10 @@ def fill_form(ws, i: int, offset: int = 0) -> None:
 
     set_cell(ws, shift(NAME_KANA_CELL, offset), calc("C"), size=10, align="center", shrink=True)
     set_cell(ws, shift(NAME_CELL, offset), calc("B"), size=16, align="center", shrink=True)
-    set_cell(ws, shift(BIRTH_YEAR_CELL, offset), calc("D"), align="center")
-    set_cell(ws, shift(BIRTH_MONTH_CELL, offset), calc("E"), align="center")
-    set_cell(ws, shift(BIRTH_DAY_CELL, offset), calc("F"), align="center")
-    set_cell(ws, shift(BIRTH_AGE_CELL, offset), calc("G"), align="center")
+    set_cell(ws, shift(BIRTH_YEAR_CELL, offset), calc("D"), align="center", size=NARROW_NUM_SIZE)
+    set_cell(ws, shift(BIRTH_MONTH_CELL, offset), calc("E"), align="center", size=WIDE_NUM_SIZE)
+    set_cell(ws, shift(BIRTH_DAY_CELL, offset), calc("F"), align="center", size=WIDE_NUM_SIZE)
+    set_cell(ws, shift(BIRTH_AGE_CELL, offset), calc("G"), align="center", size=NARROW_NUM_SIZE)
 
     set_cell(ws, shift(ADDR_ZIP_CELL, offset), calc("H"), size=10)
     set_cell(ws, shift(ADDR_CELL, offset), calc("I"), size=10, wrap=True, indent=1)
@@ -772,13 +776,18 @@ def fill_form(ws, i: int, offset: int = 0) -> None:
     set_cell(ws, shift(CONTACT_KANA_CELL, offset), calc("M"), size=9, indent=1)
 
     set_cell(ws, shift(SCHOOL_CELL, offset), calc("N"), size=10, wrap=True)
-    set_cell(ws, shift(GRAD_YEAR_CELL, offset), f"={SETTINGS}!$B$6", align="center")
-    set_cell(ws, shift(GRAD_MONTH_CELL, offset), f"={SETTINGS}!$B$7", align="center")
+    set_cell(ws, shift(GRAD_YEAR_CELL, offset), f'={SETTINGS}!$B$6&""',
+             align="center", size=WIDE_NUM_SIZE)
+    set_cell(ws, shift(GRAD_MONTH_CELL, offset), f'={SETTINGS}!$B$7&""',
+             align="center", size=NARROW_NUM_SIZE)
 
     base = f"{SETTINGS}!$B$3"
-    set_cell(ws, shift(TODAY_YEAR_CELL, offset), f'=IF(N({base})=0,"",YEAR({base})-2018)', align="center")
-    set_cell(ws, shift(TODAY_MONTH_CELL, offset), f'=IF(N({base})=0,"",MONTH({base}))', align="center")
-    set_cell(ws, shift(TODAY_DAY_CELL, offset), f'=IF(N({base})=0,"",DAY({base}))', align="center")
+    set_cell(ws, shift(TODAY_YEAR_CELL, offset), f'=IF(N({base})=0,"",YEAR({base})-2018)&""',
+             align="center", size=WIDE_NUM_SIZE)
+    set_cell(ws, shift(TODAY_MONTH_CELL, offset), f'=IF(N({base})=0,"",MONTH({base}))&""',
+             align="center", size=WIDE_NUM_SIZE)
+    set_cell(ws, shift(TODAY_DAY_CELL, offset), f'=IF(N({base})=0,"",DAY({base}))&""',
+             align="center", size=NARROW_NUM_SIZE)
 
     for k, (row_top, row_bottom) in enumerate(LICENSE_ROW_BANDS, start=1):
         ym_col = get_column_letter(15 + (k - 1) * 2)      # O,Q,S,U,W
@@ -797,9 +806,9 @@ def fill_form(ws, i: int, offset: int = 0) -> None:
         month_col = get_column_letter(29 + (k - 1) * 3)   # AC, AF
         text_col = get_column_letter(30 + (k - 1) * 3)    # AD, AG
         set_cell(ws, shift(f"{JOB_YEAR_COLS[0]}{row_top+2}:{JOB_YEAR_COLS[1]}{row_top+3}", offset),
-                 calc(year_col), align="center")
+                 calc(year_col), align="center", size=WIDE_NUM_SIZE)
         set_cell(ws, shift(f"{JOB_MONTH_COLS[0]}{row_top+2}:{JOB_MONTH_COLS[1]}{row_top+3}", offset),
-                 calc(month_col), align="center")
+                 calc(month_col), align="center", size=NARROW_NUM_SIZE)
         set_cell(ws, shift(f"{JOB_TEXT_COLS[0]}{row_top}:{JOB_TEXT_COLS[1]}{row_bottom}", offset),
                  calc(text_col), size=10, indent=1, wrap=True)
 
@@ -908,10 +917,15 @@ def build_calc(wb) -> None:
 
         birth = f"$AJ${row}"   # 変換済みの生年月日（右端の作業列）
 
+        # 用紙の数字欄はとても狭いので、数値ではなく文字として出す（### 対策）
+        as_text = {4, 5, 6, 7, 28, 29, 31, 32}
+
         def put(col, value):
             """氏名が空の行（＝使っていない生徒）は、すべて空欄にする。"""
             if isinstance(value, str) and value.startswith("=") and col >= 2:
                 value = f'=IF({ROSTER}!${roster_col("name")}${r}="","",{value[1:]})'
+                if col in as_text:
+                    value = f'{value}&""'
             return ws.cell(row=row, column=col, value=value)
 
         put(1, i)
