@@ -25,11 +25,11 @@ SAMPLE_STUDENTS = [
         "zip": "5980001",
         "address": "大阪府泉佐野市市場東1丁目2-3 サンプルハイツ101",
         "address_kana": "おおさかふ いずみさのし いちばひがし",
-        "license.1.name": "第二種電気工事士",
+        "license.1.name": "電気工事士第二種",
         "license.1.ym": "2024-06",
-        "license.2.name": "危険物取扱者乙種第4類",
+        "license.2.name": "危険物取扱者乙4",
         "license.2.ym": "令和7年3月",
-        "license.3.name": "技能検定3級 機械加工（普通旋盤作業）",
+        "license.3.name": "技能検定　機械加工（普通旋盤作業）3級",
         "license.3.ym": "2025-11",
         "activities": (
             "・1年〜3年 機械研究部に所属（3年次は副部長）\n"
@@ -83,7 +83,7 @@ SAMPLE_STUDENTS = [
         "zip": "5960076",
         "address": "大阪府岸和田市野田町1-1-1",
         "address_kana": "おおさかふ きしわだし のだちょう",
-        "license.1.name": "小型フォークリフト運転特別教育修了",
+        "license.1.name": "小型フォークリフト運転特別教育講習修了",
         "license.1.ym": "2025-08",
         "activities": "・ソフトテニス部 主将（3年）\n・泉州オープンファクトリー参加（2年）",
         "desired_job": "機械オペレーター",

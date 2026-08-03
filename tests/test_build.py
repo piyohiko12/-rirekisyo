@@ -27,7 +27,7 @@ def sheet(tmp_path):
 def test_roster_roundtrip(sheet):
     data = read_students(sheet)
     assert [s.name for s in data.students] == ["佐野 太郎", "近畿 花子", "泉州 一郎"]
-    assert data.students[0].values["license.1.name"] == "第二種電気工事士"
+    assert data.students[0].values["license.1.name"] == "電気工事士第二種"
     assert data.students[0].class_name == "3年2組"
     assert data.settings["as_of"] == "2026-09-01"
     # 空の行は読み飛ばす（名簿は40行ある）
@@ -42,7 +42,7 @@ def test_build_all_writes_one_pdf_per_student(sheet, tmp_path):
         "3年2組_03_泉州一郎.pdf",
     ]
     text = pdf_text(results[0].path)
-    for expected in ["佐野 太郎", "さの たろう", "598-0001", "同上", "第二種電気工事士", "18"]:
+    for expected in ["佐野 太郎", "さの たろう", "598-0001", "同上", "電気工事士第二種", "18"]:
         assert expected in text, expected
     assert "大阪府立佐野工科高等学校" in text  # 用紙の印字が消えていない
     # 連絡先を入力した生徒は「同上」にならない

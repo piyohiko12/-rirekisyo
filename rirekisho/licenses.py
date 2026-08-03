@@ -88,16 +88,25 @@ def official_name(name: str, master: dict[str, str] | None) -> str:
 
 
 def _master_key(text: str) -> str:
-    """表記ゆれを吸収した照合用のキー（空白・記号を落として全角半角をそろえる）。"""
+    """表記ゆれを吸収した照合用のキー。
+
+    全角半角をそろえたうえで、空白・記号・長音記号（ー／－）を落とす。
+    「ア－ク溶接…」と「アーク溶接…」、「Ａ－２Ｆ」と「A-2F」を同じものとして扱う。
+    """
     text = unicodedata.normalize("NFKC", str(text)).lower()
-    return re.sub(r"[\s　・（）()【】\[\]．.,、。/／-]", "", text)
+    return re.sub(r"[\s　・（）()【】\[\]．.,、。/／ーｰ-]", "", text)
 
 
 def build_master(pairs: list[tuple[object, object]]) -> dict[str, str]:
-    """(変換前, 正式名称) の並びから変換表を作る。"""
+    """(変換前, 正式名称) の並びから変換表を作る。
+
+    正式名称は **マスタに書かれたとおり** に使う（「色彩検定３級」のように
+    全角で登録してあれば全角のまま印字する）。
+    """
     master: dict[str, str] = {}
     for src, dest in pairs:
-        src_text, dest_text = normalize(src), normalize(dest)
+        src_text = normalize(src)
+        dest_text = "" if dest is None else str(dest).strip()
         if src_text and dest_text:
             master[_master_key(src_text)] = dest_text
     return master

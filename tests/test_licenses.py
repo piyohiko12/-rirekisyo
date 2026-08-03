@@ -33,10 +33,11 @@ def students(tmp_path):
 @pytest.mark.parametrize(
     "raw,expected",
     [
-        ("英検2級", "実用英語技能検定2級"),
-        ("英検 2級", "実用英語技能検定2級"),      # 空白は無視
-        ("ＱＣ検定3級", "品質管理検定3級"),        # 全角も同じ扱い
-        ("乙4", "危険物取扱者乙種第4類"),
+        ("実用英語検定2級", "実用英語検定2級"),
+        ("実用英語検定 準2級", "実用英語検定準２級"),   # 空白と全角半角をそろえる
+        ("ＱＣ検定3級", "QC検定3級"),
+        ("アーク溶接安全衛生教育修了", "ア－ク溶接安全衛生教育修了"),  # 長音記号のゆれも吸収
+        ("アーク溶接技能者適格性証明書A-2F", "アーク溶接技能者適格性証明書Ａ－２Ｆ"),
         ("だれも知らない検定", "だれも知らない検定"),  # マスタに無ければそのまま
     ],
 )
@@ -44,8 +45,15 @@ def test_official_name(raw, expected):
     assert official_name(raw, MASTER) == expected
 
 
+def test_master_has_no_conflicting_keys():
+    """変換表のキーがぶつかっていない（同じ名前とみなされる行が無い）こと。"""
+    assert len(MASTER) == len(DEFAULT_MASTER)
+
+
 def test_master_applies_to_hand_typed_licenses():
-    resume = build_resume({"license.1.name": "漢検2級", "license.1.ym": "2025-06"}, master=MASTER)
+    resume = build_resume(
+        {"license.1.name": "日本漢字能力検定 2級", "license.1.ym": "2025-06"}, master=MASTER
+    )
     assert resume.licenses[0].name == "日本漢字能力検定2級"
 
 
@@ -68,22 +76,22 @@ def test_import_matches_by_number_and_name(students):
     report = import_licenses(
         [
             "3-2-1 佐野太郎 計算技術検定3級 令和6年11月15日",  # 番号で照合
-            "近畿花子 英検2級 2025/6/8",                      # 氏名だけで照合
+            "近畿花子 実用英語検定2級 2025/6/8",                # 氏名だけで照合
         ],
         students,
         master=MASTER,
     )
     assert [r.status for r in report.rows] == [STATUS_APPLIED, STATUS_APPLIED]
     hanako = build_resume(students[1].values, master=MASTER)
-    assert "実用英語技能検定2級" in [lic.name for lic in hanako.licenses]
+    assert "実用英語検定2級" in [lic.name for lic in hanako.licenses]
 
 
 def test_import_skips_duplicates_and_reports_problems(students):
     report = import_licenses(
         [
             "",  # 空行は数えない
-            "3-2-1 佐野太郎 第二種電気工事士 2024-06-20",   # 手入力ずみ
-            "3-2-9 いない生徒 漢検3級 令和6年10月1日",       # 名簿にいない
+            "3-2-1 佐野太郎 電気工事士第二種 2024-06-20",   # 手入力ずみ
+            "3-2-9 いない生徒 日本漢字能力検定3級 令和6年10月1日",  # 名簿にいない
             "3-2-2 近畿花子 基礎製図検定",                   # 取得日なし
         ],
         students,
@@ -101,7 +109,7 @@ def test_imported_licenses_are_sorted_by_date(students):
     resume = build_resume(students[0].values, master=MASTER)
     ym = [(lic.year, lic.month) for lic in resume.licenses]
     assert ym == sorted(ym)
-    assert [lic.name for lic in resume.licenses][:2] == ["第二種電気工事士", "計算技術検定3級"]
+    assert [lic.name for lic in resume.licenses][:2] == ["電気工事士第二種", "計算技術検定3級"]
 
 
 def test_input_order_can_be_kept(students):
@@ -114,11 +122,11 @@ def test_paste_sheet_is_imported_during_build(tmp_path):
     write_template(
         path,
         students=SAMPLE_STUDENTS,
-        paste_lines=["3-2-3 泉州一郎 乙4 令和7年3月14日"],
+        paste_lines=["3-2-3 泉州一郎 危険物取扱者乙4 令和7年3月14日"],
     )
     results = build_all(path, tmp_path / "出力", template=DEFAULT_TEMPLATE)
     text = fitz_text(results[2].path)
-    assert "危険物取扱者乙種第4類" in text
+    assert "危険物取扱者乙4" in text
     assert (tmp_path / "出力" / "資格取込ログ.csv").exists()
 
 
