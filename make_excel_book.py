@@ -218,6 +218,19 @@ def build_roster(wb, students: list[dict] | None) -> None:
         course_dv.add(ws.cell(row=row, column=cols.index(next(c for c in cols if c.key == "course")) + 1))
         ws.row_dimensions[row].height = 22
 
+    # 郵便番号から住所のふりがなを自動で入れる（上から書き込めば手入力が優先される）
+    auto_kana = [
+        (roster_col("address_kana"), roster_col("zip")),
+        (roster_col("contact_kana"), roster_col("contact_zip")),
+    ]
+    for kana_col, zip_col in auto_kana:
+        for r in range(STUDENTS):
+            row = ROSTER_FIRST_ROW + r
+            ws[f"{kana_col}{row}"] = (
+                f'=IF({zip_col}{row}="","",IFERROR(VLOOKUP(TEXT(VALUE('
+                f'SUBSTITUTE({zip_col}{row},"-","")),"0000000"),{ZIPCODES}!$A:$C,3,FALSE),""))'
+            )
+
     match_col = roster_col_match()
     ws[f"{match_col}3"] = "照合用（自動）"
     ws[f"{match_col}3"].font = Font(size=8, color="999999")
@@ -626,7 +639,10 @@ def zipcode_rows() -> list[tuple[str, str, str]]:
             if town in ("以下に掲載がない場合",):
                 town, town_kana = "", ""
             address = f'{d["prefecture"]}{d["city"]}{town}'
-            kana = to_hiragana(f'{d["prefecture_kana"]}{d["city_kana"]}{town_kana}')
+            kana = " ".join(
+                to_hiragana(part)
+                for part in (d["prefecture_kana"], d["city_kana"], town_kana) if part
+            )
             rows.append((code, address, kana))
     return rows
 
@@ -663,8 +679,10 @@ def build_guide(wb) -> None:
         "",
         "1.「入力」シートに、名列順で生徒の情報を入力します（黄色いセル）。",
         "   ・学科は6種類からドロップダウンで選べます（空欄なら「設定」の既定の学科）。",
-        "   ・ふりがな（住所）は空欄でもOK。郵便番号から自動で入ります（大阪府・和歌山県・奈良県）。",
-        "     郵便番号だけでは町名までしか分からないので、番地の読みが要るときは手で書き足してください。",
+        "   ・郵便番号を入れると、ふりがな（住所）が自動で入ります（大阪府・和歌山県・奈良県）。",
+        "     連絡先のふりがなも、連絡先の郵便番号から同じように入ります。",
+        "     読みを直したいときは、そのセルに上から書き込んでください（そのセルだけ自動が外れます）。",
+        "     郵便番号では町名までしか分からないので、番地の読みが要るときは書き足してください。",
         "   ・連絡先を空欄にすると、履歴書には自動で「同上」と入ります。",
         "   ・生年月日は「2008/5/12」のように日付で入力してください（元号と満○歳は自動）。",
         "",
@@ -1124,6 +1142,9 @@ def main(argv: list[str] | None = None) -> int:
         from make_xlsx import SAMPLE_STUDENTS
 
         students = [dict(s) for s in SAMPLE_STUDENTS]
+        for s in students:          # 住所の読みは郵便番号から自動で入るので消しておく
+            s.pop("address_kana", None)
+            s.pop("contact_kana", None)
         for s in students:
             for key, value in list(s.items()):
                 if key == "birth" or key.endswith(".ym") or key.endswith("job.1.ym"):
