@@ -12,7 +12,7 @@ import fitz
 
 from . import layout as L
 from .fonts import find_japanese_font
-from .model import Resume
+from .model import SAME_AS_ABOVE, Resume
 
 FONT_NAME = "jpgothic"
 
@@ -40,6 +40,12 @@ class Renderer:
     def text_width(self, text: str, size: float) -> float:
         return self.font.text_length(text, size)
 
+    def _baseline(self, y0: float, y1: float, size: float) -> float:
+        """文字の見た目が枠の上下中央に来るベースライン位置。"""
+        ascender = getattr(self.font, "ascender", 0.88)
+        descender = getattr(self.font, "descender", -0.12)
+        return (y0 + y1) / 2 + (ascender + descender) / 2 * size
+
     def draw_line(
         self,
         text: str,
@@ -64,9 +70,46 @@ class Renderer:
             x = x1 - pad - w
         else:
             x = x0 + pad
-        baseline = (y0 + y1) / 2 + size * 0.35
         self.page.insert_text(
-            self._point(x, baseline), text, fontname=FONT_NAME, fontsize=size, rotate=90
+            self._point(x, self._baseline(y0, y1, size)),
+            text,
+            fontname=FONT_NAME,
+            fontsize=size,
+            rotate=90,
+        )
+
+    def draw_balanced_line(
+        self,
+        text: str,
+        band: tuple[float, float, float, float],
+        *,
+        max_size: float,
+        fill: float = 0.6,
+        min_size: float = L.MIN_FONT_SIZE,
+        pad: float = 6.0,
+    ) -> None:
+        """氏名のように、枠に対して見た目のバランスをとって中央に置く。
+
+        文字数が少なければ大きく、多ければ小さくして、枠幅の ``fill`` 倍あたりに
+        収まるようにする（上下も中央そろえ）。
+        """
+        if not text:
+            return
+        x0, y0, x1, y1 = band
+        width = x1 - x0
+        height = y1 - y0
+        unit = self.text_width(text, 1.0) or 1.0
+        size = min(max_size, width * fill / unit, height * 0.62)
+        while size > min_size and self.text_width(text, size) > width - pad * 2:
+            size -= 0.25
+        size = max(size, min_size)
+        x = x0 + (width - self.text_width(text, size)) / 2
+        self.page.insert_text(
+            self._point(x, self._baseline(y0, y1, size)),
+            text,
+            fontname=FONT_NAME,
+            fontsize=size,
+            rotate=90,
         )
 
     def wrap(self, text: str, size: float, width: float) -> list[str]:
@@ -121,7 +164,7 @@ class Renderer:
         for i, line in enumerate(lines):
             if not line:
                 continue
-            baseline = top + size * line_gap * i + size
+            baseline = top + size * line_gap * i + size * 0.92
             if baseline > y1:  # 欄からあふれる分は書かない
                 break
             self.page.insert_text(
@@ -152,8 +195,8 @@ class Renderer:
 # ------------------------------------------------------------------ 各欄の描画
 def _draw_personal(r: Renderer, resume: Resume) -> None:
     fs = L.FONT_SIZES
-    r.draw_line(resume.name_kana, L.NAME_KANA, fs["kana"], align="center", pad=8)
-    r.draw_line(resume.name, L.NAME, fs["name"], align="center", pad=10)
+    r.draw_balanced_line(resume.name_kana, L.NAME_KANA, max_size=fs["kana"], fill=0.55)
+    r.draw_balanced_line(resume.name, L.NAME, max_size=fs["name"], fill=L.NAME_FILL)
 
     if resume.birth:
         y0, y1 = L.BIRTH_ROW
@@ -181,7 +224,8 @@ def _draw_personal(r: Renderer, resume: Resume) -> None:
     r.draw_block(resume.address, L.ADDR_TEXT, fs["address"], valign="center")
 
     if resume.contact_is_same:
-        r.draw_line("同上", L.CONTACT_TEXT, fs["address"], pad=8)
+        # 「同上」だけのときは連絡先の枠の真ん中に置く
+        r.draw_line(SAME_AS_ABOVE, L.CONTACT_SAME, fs["address"], align="center")
     else:
         r.draw_line(resume.contact_zip, L.CONTACT_ZIP, fs["zip"])
         r.draw_line(resume.contact_kana, L.CONTACT_KANA, fs["kana"], pad=8)
@@ -235,18 +279,13 @@ def _draw_jobs(r: Renderer, resume: Resume) -> None:
 
 
 def compose_motivation(resume: Resume) -> str:
-    """志望の動機・希望の職種・アピールポイントを1つの欄用にまとめる。"""
-    parts = [
-        ("希望の職種", resume.desired_job),
-        ("アピールポイント", resume.appeal),
-        ("志望の動機", resume.motivation),
-    ]
-    filled = [(label, value) for label, value in parts if value]
-    if not filled:
-        return ""
-    if len(filled) == 1:
-        return filled[0][1]
-    return "\n".join(f"【{label}】\n{value}" for label, value in filled)
+    """志望の動機・希望の職種・アピールポイントを1つの欄用にまとめる。
+
+    見出しは付けず、用紙の項目名（志望の動機／希望の職種／アピールポイント）の
+    並び順どおりに、入力のあるものだけを続けて書く。
+    """
+    parts = [resume.motivation, resume.desired_job, resume.appeal]
+    return "\n".join(part for part in parts if part)
 
 
 def render_resume(

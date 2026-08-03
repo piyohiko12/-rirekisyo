@@ -69,9 +69,10 @@ def columns() -> list[Column]:
         )
     cols += [
         Column("校内外の諸活動", "activities", 34.0, "校内外の諸活動", "セル内改行で箇条書き"),
-        Column("希望の職種", "desired_job", 18.0, "志望の動機など"),
-        Column("アピールポイント", "appeal", 34.0, "志望の動機など"),
-        Column("志望の動機", "motivation", 40.0, "志望の動機など"),
+        Column("志望の動機", "motivation", 40.0, "志望の動機など",
+               "この欄だけでも可。見出しは付けずにそのまま印字します"),
+        Column("希望の職種", "desired_job", 18.0, "志望の動機など", "任意。志望の動機に続けて印字します"),
+        Column("アピールポイント", "appeal", 34.0, "志望の動機など", "任意。最後に続けて印字します"),
     ]
     for i in range(1, MAX_JOB_SLOTS + 1):
         cols.append(Column(f"職歴{i} 年月", f"job.{i}.ym", 11.0, "職歴", kind="date"))
