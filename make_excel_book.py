@@ -50,7 +50,7 @@ CALC_FIRST_ROW = 3
 PASTE = "資格取込"
 PASTE_FIRST_ROW = 6      # 貼り付けを始める行
 PASTE_ROWS = 200         # 貼り付けられる件数
-IMPORT_SLOTS = 6         # 1人が取り込める件数
+IMPORT_SLOTS = 8         # 1人が取り込める件数
 GUIDE = "使い方"
 ZIPCODES = "郵便番号"
 FORM_SHEET = "履歴書"
@@ -60,8 +60,10 @@ ZIP_PREFECTURES = ("大阪府", "和歌山県", "奈良県")
 ROSTER_FIRST_ROW = 5      # 生徒1人目の行
 STUDENTS = 40             # 履歴書シートの枚数
 LICENSE_SLOTS = 6         # 「入力」シートの資格の枠数
-GATHER_SLOTS = 12         # 資格集約の1人分の行数（手入力6＋取込6）
-LICENSE_ROWS_ON_FORM = 5  # 用紙の資格欄の行数
+GATHER_SLOTS = 14         # 資格集約の1人分の行数（手入力6＋取込8）
+LICENSE_ROWS_ON_FORM = 13  # 用紙の資格欄に出す行数
+CALC_LICENSE_COL = 15                                          # 計算シートの資格欄の開始列
+CALC_AFTER_LICENSE = CALC_LICENSE_COL + LICENSE_ROWS_ON_FORM * 2  # 諸活動から先の開始列
 GATHER_FIRST_ROW = 3
 
 # 学科（公式様式の6シートから。電気系電気技術科は原本の誤記を直してある）
@@ -98,7 +100,12 @@ MOTIVATION_CELL = "BW47:DU75"
 REMARKS_CELL = "BW76:DU87"
 LICENSE_YM_COLS = ("BW", "CG")
 LICENSE_NAME_COLS = ("CH", "DU")
-LICENSE_ROW_BANDS = [(9, 12), (13, 16), (17, 20), (21, 24), (25, 29)]
+# 資格欄は用紙の行9〜29（21行・合計141.75pt）。ここを13等分して使う。
+# 行の高さを組み替えるだけで合計は変えないので、下の欄の位置はずれない。
+LICENSE_AREA_ROWS = (9, 29)
+LICENSE_ROW_BANDS = [(9 + i, 9 + i) for i in range(LICENSE_ROWS_ON_FORM)]
+LICENSE_ROW_HEIGHT = 6.75 * 21 / LICENSE_ROWS_ON_FORM   # 1行あたりの高さ
+LICENSE_FONT_SIZE = 8.5
 JOB_ROW_BANDS = [(64, 69), (70, 75), (76, 81), (82, 87)]
 JOB_YEAR_COLS = ("P", "R")
 JOB_MONTH_COLS = ("U", "V")
@@ -428,7 +435,7 @@ def build_gather(wb) -> None:
             row = top + k - 1
             ws.cell(row=row, column=1, value=i)
             ws.cell(row=row, column=2, value=k)
-            if k > LICENSE_SLOTS:   # 資格取込から取り込む分
+            if k > LICENSE_SLOTS:   # 資格取込から取り込む分  (最大 IMPORT_SLOTS 件)
                 j = k - LICENSE_SLOTS
                 key = f'{i}&"_"&{j}'
                 pos = f'MATCH({key},{PASTE}!$Z${paste_first}:$Z${paste_last},0)'
@@ -713,7 +720,7 @@ def build_guide(wb) -> None:
         "   ・学年-組-出席番号 → 氏名 → 資格名 → 取得日 の順（区切りは空白でもタブでも可）",
         "   ・先頭の番号がないときは氏名で照合します。",
         "   ・「状態」の列に 反映／重複／要確認 が出るので、要確認の行だけ直してください。",
-        "   ・手入力した資格と合わせて、取得年月の古い順に並べて印字します（上から5件）。",
+        "   ・手入力した資格と合わせて、取得年月の古い順に並べて印字します（最大13件）。",
         "",
         "■ 各シートの役割",
         "・入力　　　… 生徒の情報（1行＝1生徒）",
@@ -731,7 +738,7 @@ def build_guide(wb) -> None:
         "・郵便番号　… 7桁の数字だけでも 123-4567 の形にします。",
         "・住所のふりがな … 郵便番号から自動で入ります（手で入れた場合はそちらが優先）。",
         "・連絡先　　… 空欄なら「同上」。",
-        "・資格　　　… 取得年月の古い順に並べ、資格マスタの正式名称で印字します（上から5件）。",
+        "・資格　　　… 取得年月の古い順に並べ、資格マスタの正式名称で印字します（最大13件）。",
         "・在籍校　　… 「設定」の学校名と、生徒ごとの学科を組み合わせます。",
         "",
         "■ 注意",
@@ -790,21 +797,24 @@ def fill_form(ws, i: int, offset: int = 0) -> None:
              align="center", size=NARROW_NUM_SIZE)
 
     for k, (row_top, row_bottom) in enumerate(LICENSE_ROW_BANDS, start=1):
-        ym_col = get_column_letter(15 + (k - 1) * 2)      # O,Q,S,U,W
-        name_col = get_column_letter(16 + (k - 1) * 2)    # P,R,T,V,X
+        ym_col = get_column_letter(CALC_LICENSE_COL + (k - 1) * 2)
+        name_col = get_column_letter(CALC_LICENSE_COL + (k - 1) * 2 + 1)
         set_cell(ws, shift(f"{LICENSE_YM_COLS[0]}{row_top}:{LICENSE_YM_COLS[1]}{row_bottom}", offset),
-                 calc(ym_col), size=10, align="center")
+                 calc(ym_col), size=LICENSE_FONT_SIZE, align="center")
         set_cell(ws, shift(f"{LICENSE_NAME_COLS[0]}{row_top}:{LICENSE_NAME_COLS[1]}{row_bottom}", offset),
-                 calc(name_col), size=10, indent=1, shrink=True)
+                 calc(name_col), size=LICENSE_FONT_SIZE, indent=1, shrink=True)
 
-    set_cell(ws, shift(ACTIVITIES_CELL, offset), calc("Y"), size=10, valign="top", wrap=True, indent=1)
-    set_cell(ws, shift(MOTIVATION_CELL, offset), calc("Z"), size=10, valign="top", wrap=True, indent=1)
-    set_cell(ws, shift(REMARKS_CELL, offset), calc("AA"), size=10, valign="top", wrap=True, indent=1)
+    set_cell(ws, shift(ACTIVITIES_CELL, offset), calc(get_column_letter(CALC_AFTER_LICENSE)),
+             size=10, valign="top", wrap=True, indent=1)
+    set_cell(ws, shift(MOTIVATION_CELL, offset), calc(get_column_letter(CALC_AFTER_LICENSE + 1)),
+             size=10, valign="top", wrap=True, indent=1)
+    set_cell(ws, shift(REMARKS_CELL, offset), calc(get_column_letter(CALC_AFTER_LICENSE + 2)),
+             size=10, valign="top", wrap=True, indent=1)
 
     for k, (row_top, row_bottom) in enumerate(JOB_ROW_BANDS[:2], start=1):
-        year_col = get_column_letter(28 + (k - 1) * 3)    # AB, AE
-        month_col = get_column_letter(29 + (k - 1) * 3)   # AC, AF
-        text_col = get_column_letter(30 + (k - 1) * 3)    # AD, AG
+        year_col = get_column_letter(CALC_AFTER_LICENSE + 3 + (k - 1) * 3)
+        month_col = get_column_letter(CALC_AFTER_LICENSE + 4 + (k - 1) * 3)
+        text_col = get_column_letter(CALC_AFTER_LICENSE + 5 + (k - 1) * 3)
         set_cell(ws, shift(f"{JOB_YEAR_COLS[0]}{row_top+2}:{JOB_YEAR_COLS[1]}{row_top+3}", offset),
                  calc(year_col), align="center", size=WIDE_NUM_SIZE)
         set_cell(ws, shift(f"{JOB_MONTH_COLS[0]}{row_top+2}:{JOB_MONTH_COLS[1]}{row_top+3}", offset),
@@ -846,6 +856,12 @@ def build_form_sheet(wb, src) -> None:
             ws.row_dimensions[r + offset].height = (
                 dim.height if dim is not None and dim.height else default_height
             )
+        # 資格欄を13行に組み替える（合計の高さは変えない）
+        first_row, last_row = LICENSE_AREA_ROWS
+        for k in range(LICENSE_ROWS_ON_FORM):
+            ws.row_dimensions[first_row + k + offset].height = LICENSE_ROW_HEIGHT
+        for r in range(first_row + LICENSE_ROWS_ON_FORM, last_row + 1):
+            ws.row_dimensions[r + offset].height = 0
         for rng in merges:
             ws.merge_cells(shift(rng, offset))
         fill_form(ws, i, offset)
@@ -890,8 +906,10 @@ def build_calc(wb) -> None:
         "No", "氏名", "ふりがな", "生年(和暦)", "生月", "生日", "満年齢",
         "郵便番号", "住所", "住所ふりがな", "連絡先〒", "連絡先", "連絡先ふりがな",
         "在籍校",
-        "資格1年月", "資格1名称", "資格2年月", "資格2名称", "資格3年月", "資格3名称",
-        "資格4年月", "資格4名称", "資格5年月", "資格5名称",
+    ]
+    for k in range(1, LICENSE_ROWS_ON_FORM + 1):
+        headers += [f"資格{k}年月", f"資格{k}名称"]
+    headers += [
         "諸活動", "志望の動機など", "備考",
         "職歴1年", "職歴1月", "職歴1内容", "職歴2年", "職歴2月", "職歴2内容",
     ]
@@ -915,10 +933,12 @@ def build_calc(wb) -> None:
         def ref(key: str) -> str:
             return f"{ROSTER}!${roster_col(key)}${r}"
 
-        birth = f"$AJ${row}"   # 変換済みの生年月日（右端の作業列）
+        birth = f"${get_column_letter(CALC_AFTER_LICENSE + 8)}${row}"  # 変換済みの生年月日
 
         # 用紙の数字欄はとても狭いので、数値ではなく文字として出す（### 対策）
-        as_text = {4, 5, 6, 7, 28, 29, 31, 32}
+        as_text = {4, 5, 6, 7,
+                   CALC_AFTER_LICENSE + 3, CALC_AFTER_LICENSE + 4,
+                   CALC_AFTER_LICENSE + 6, CALC_AFTER_LICENSE + 7}
 
         def put(col, value):
             """氏名が空の行（＝使っていない生徒）は、すべて空欄にする。"""
@@ -955,23 +975,25 @@ def build_calc(wb) -> None:
 
         for k in range(1, LICENSE_ROWS_ON_FORM + 1):
             rank = f'MATCH({k},{GATHER}!$G${top}:$G${bottom},0)'
-            put(13 + k * 2, f'=IF({field_cell("licenses")}="×","",'
-                            f'IFERROR(INDEX({GATHER}!$H${top}:$H${bottom},{rank}),""))')
-            put(14 + k * 2, f'=IF({field_cell("licenses")}="×","",'
-                            f'IFERROR(INDEX({GATHER}!$E${top}:$E${bottom},{rank}),""))')
+            col = CALC_LICENSE_COL + (k - 1) * 2
+            put(col, f'=IF({field_cell("licenses")}="×","",'
+                     f'IFERROR(INDEX({GATHER}!$H${top}:$H${bottom},{rank}),""))')
+            put(col + 1, f'=IF({field_cell("licenses")}="×","",'
+                         f'IFERROR(INDEX({GATHER}!$E${top}:$E${bottom},{rank}),""))')
 
-        put(25, guard("activities", ref("activities")))
-        put(26, f'=IF({field_cell("motivation")}="×","",'
+        put(CALC_AFTER_LICENSE, guard("activities", ref("activities")))
+        put(CALC_AFTER_LICENSE + 1, f'=IF({field_cell("motivation")}="×","",'
                 f'IF({ref("motivation")}="","",{ref("motivation")}&CHAR(10)))'
                 f'&IF({field_cell("desired_job")}="×","",'
                 f'IF({ref("desired_job")}="","",{ref("desired_job")}&CHAR(10)))'
                 f'&IF({field_cell("appeal")}="×","",'
                 f'IF({ref("appeal")}="","",{ref("appeal")}))')
-        put(27, guard("remarks", ref("remarks")))
+        put(CALC_AFTER_LICENSE + 2, guard("remarks", ref("remarks")))
 
+        work = CALC_AFTER_LICENSE + 8          # 作業列（生年月日・職歴年月）
         for k in (1, 2):
-            job_ym = f"${get_column_letter(36 + k)}${row}"   # AK, AL に変換済みの年月
-            base_col = 28 + (k - 1) * 3
+            job_ym = f"${get_column_letter(work + k)}${row}"
+            base_col = CALC_AFTER_LICENSE + 3 + (k - 1) * 3
             put(base_col, guard("jobs",
                                 f'YEAR({job_ym})-IF({job_ym}>=DATE(2019,5,1),2018,1988)',
                                 f'N({job_ym})=0'))
@@ -979,18 +1001,19 @@ def build_calc(wb) -> None:
             put(base_col + 2, guard("jobs", ref(f"job.{k}.text")))
 
         # 作業列（日付に変換したもの。和暦の文字で入力されていても読む）
-        put(36, f"={to_date(ref('birth'))}")
-        put(37, f"={to_date(ref('job.1.ym'))}")
-        put(38, f"={to_date(ref('job.2.ym'))}")
+        put(work, f"={to_date(ref('birth'))}")
+        put(work + 1, f"={to_date(ref('job.1.ym'))}")
+        put(work + 2, f"={to_date(ref('job.2.ym'))}")
 
     # 和暦年・月・日・満年齢・職歴の年月は数値として表示する（### 対策）
     for i in range(1, STUDENTS + 1):
         row = CALC_FIRST_ROW + i - 1
-        for col in (4, 5, 6, 7, 28, 29, 31, 32):
+        for col in (4, 5, 6, 7, CALC_AFTER_LICENSE + 3, CALC_AFTER_LICENSE + 4,
+                    CALC_AFTER_LICENSE + 6, CALC_AFTER_LICENSE + 7):
             ws.cell(row=row, column=col).number_format = "General"
 
-    for col in ("AJ", "AK", "AL"):
-        ws.column_dimensions[col].hidden = True
+    for i in range(CALC_AFTER_LICENSE + 8, CALC_AFTER_LICENSE + 11):
+        ws.column_dimensions[get_column_letter(i)].hidden = True
     ws.sheet_state = "hidden"
 
 
