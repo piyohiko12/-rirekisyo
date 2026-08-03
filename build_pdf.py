@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from rirekisho import DEFAULT_TEMPLATE
-from rirekisho.inputs import Student, read_students
+from rirekisho.inputs import OUTPUT_FIELDS, Student, read_students
 from rirekisho.licenses import ImportReport, build_master, import_licenses, write_log
 from rirekisho.model import InputError, build_resume, normalize, parse_date
 from rirekisho.render import render_preview_png, render_resume
@@ -46,6 +46,7 @@ def build_all(
     png: bool = False,
     license_lines: list[str] | None = None,
     report: list[ImportReport] | None = None,
+    fields: dict[str, bool] | None = None,
 ) -> list[Result]:
     """入力シートを読んで、生徒ごとにPDFを書き出す。
 
@@ -54,6 +55,7 @@ def build_all(
     """
     data = read_students(input_path)
     settings = data.settings
+    selection = {**data.fields, **(fields or {})}
     class_label = normalize(settings.get("class_label"))
     license_order = normalize(settings.get("license_order")) or "取得年月順"
     master = build_master(data.master_pairs)
@@ -80,7 +82,7 @@ def build_all(
             student.values, as_of=as_of_date, master=master, license_order=license_order
         )
         out = out_dir / f"{student.file_stem(class_label)}.pdf"
-        render_resume(resume, template=template, out_path=out, font_path=font)
+        render_resume(resume, template=template, out_path=out, font_path=font, fields=selection)
         if png:
             render_preview_png(out, out.with_suffix(".png"))
         results.append(Result(student, out, resume.warnings))
@@ -117,7 +119,22 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--font", help="日本語フォントのパス（省略時は自動検出）")
     parser.add_argument("--png", action="store_true", help="確認用のPNGも書き出す")
+    parser.add_argument(
+        "--skip",
+        help="PDFに反映しない項目をカンマ区切りで指定する（例: contact,jobs,remarks）。"
+        f"指定できる項目: {', '.join(key for key, _l, _d in OUTPUT_FIELDS)}",
+    )
     args = parser.parse_args(argv)
+
+    skip_fields = None
+    if args.skip:
+        names = [name.strip() for name in args.skip.split(",") if name.strip()]
+        known = {key for key, _l, _d in OUTPUT_FIELDS}
+        unknown = [name for name in names if name not in known]
+        if unknown:
+            print(f"エラー: 知らない項目です: {', '.join(unknown)}", file=sys.stderr)
+            return 1
+        skip_fields = {name: False for name in names}
 
     license_lines = None
     if args.licenses:
@@ -136,6 +153,7 @@ def main(argv: list[str] | None = None) -> int:
             png=args.png,
             license_lines=license_lines,
             report=reports,
+            fields=skip_fields,
         )
     except (InputError, FileNotFoundError, ValueError) as exc:
         print(f"エラー: {exc}", file=sys.stderr)

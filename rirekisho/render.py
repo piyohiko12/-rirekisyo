@@ -12,6 +12,7 @@ import fitz
 
 from . import layout as L
 from .fonts import find_japanese_font
+from .inputs import default_fields
 from .model import SAME_AS_ABOVE, Resume
 
 FONT_NAME = "jpgothic"
@@ -193,12 +194,14 @@ class Renderer:
 
 
 # ------------------------------------------------------------------ 各欄の描画
-def _draw_personal(r: Renderer, resume: Resume) -> None:
+def _draw_personal(r: Renderer, resume: Resume, on) -> None:
     fs = L.FONT_SIZES
-    r.draw_balanced_line(resume.name_kana, L.NAME_KANA, max_size=fs["kana"], fill=0.55)
-    r.draw_balanced_line(resume.name, L.NAME, max_size=fs["name"], fill=L.NAME_FILL)
+    if on("name_kana"):
+        r.draw_balanced_line(resume.name_kana, L.NAME_KANA, max_size=fs["kana"], fill=0.55)
+    if on("name"):
+        r.draw_balanced_line(resume.name, L.NAME, max_size=fs["name"], fill=L.NAME_FILL)
 
-    if resume.birth:
+    if resume.birth and on("birth"):
         y0, y1 = L.BIRTH_ROW
         era = resume.birth_era
         if era != L.BIRTH_ERA_PREPRINTED:
@@ -219,11 +222,16 @@ def _draw_personal(r: Renderer, resume: Resume) -> None:
         r.draw_line(str(resume.birth.day), band(L.BIRTH_DAY), fs["birth"], align="center")
         r.draw_line(resume.age, band(L.BIRTH_AGE), fs["birth"], align="center")
 
-    r.draw_line(resume.zip_code, L.ADDR_ZIP, fs["zip"])
-    r.draw_line(resume.address_kana, L.ADDR_KANA, fs["kana"], pad=8)
-    r.draw_block(resume.address, L.ADDR_TEXT, fs["address"], valign="center")
+    if on("zip"):
+        r.draw_line(resume.zip_code, L.ADDR_ZIP, fs["zip"])
+    if on("address_kana"):
+        r.draw_line(resume.address_kana, L.ADDR_KANA, fs["kana"], pad=8)
+    if on("address"):
+        r.draw_block(resume.address, L.ADDR_TEXT, fs["address"], valign="center")
 
-    if resume.contact_is_same:
+    if not on("contact"):
+        pass
+    elif resume.contact_is_same:
         # 「同上」だけのときは連絡先の枠の真ん中に置く
         r.draw_line(SAME_AS_ABOVE, L.CONTACT_SAME, fs["address"], align="center")
     else:
@@ -278,13 +286,21 @@ def _draw_jobs(r: Renderer, resume: Resume) -> None:
         )
 
 
-def compose_motivation(resume: Resume) -> str:
+def compose_motivation(resume: Resume, on=None) -> str:
     """志望の動機・希望の職種・アピールポイントを1つの欄用にまとめる。
 
     見出しは付けず、用紙の項目名（志望の動機／希望の職種／アピールポイント）の
     並び順どおりに、入力のあるものだけを続けて書く。
     """
-    parts = [resume.motivation, resume.desired_job, resume.appeal]
+    if on is None:
+        def on(_key: str) -> bool:  # 既定はすべて反映
+            return True
+
+    parts = [
+        (resume.motivation if on("motivation") else ""),
+        (resume.desired_job if on("desired_job") else ""),
+        (resume.appeal if on("appeal") else ""),
+    ]
     return "\n".join(part for part in parts if part)
 
 
@@ -294,15 +310,28 @@ def render_resume(
     template: str | Path,
     out_path: str | Path,
     font_path: str | Path | None = None,
+    fields: dict[str, bool] | None = None,
 ) -> Path:
-    """Resume の内容をテンプレートPDFに書き込んで保存する。"""
+    """Resume の内容をテンプレートPDFに書き込んで保存する。
+
+    fields で「反映する項目」を指定できる（False にした項目は書き込まない）。
+    """
+    selection = {**default_fields(), **(fields or {})}
+
+    def on(key: str) -> bool:
+        return selection.get(key, True)
+
     r = Renderer(template, font_path)
-    _draw_personal(r, resume)
-    _draw_licenses(r, resume)
-    _draw_jobs(r, resume)
-    r.draw_block(resume.activities, L.ACTIVITIES, L.FONT_SIZES["body"])
-    r.draw_block(compose_motivation(resume), L.MOTIVATION, L.FONT_SIZES["body"])
-    r.draw_block(resume.remarks, L.REMARKS, L.FONT_SIZES["body"])
+    _draw_personal(r, resume, on)
+    if on("licenses"):
+        _draw_licenses(r, resume)
+    if on("jobs"):
+        _draw_jobs(r, resume)
+    if on("activities"):
+        r.draw_block(resume.activities, L.ACTIVITIES, L.FONT_SIZES["body"])
+    r.draw_block(compose_motivation(resume, on), L.MOTIVATION, L.FONT_SIZES["body"])
+    if on("remarks"):
+        r.draw_block(resume.remarks, L.REMARKS, L.FONT_SIZES["body"])
     return r.save(out_path)
 
 

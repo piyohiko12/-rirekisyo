@@ -24,6 +24,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from build_pdf import DEFAULT_INPUT, DEFAULT_OUTDIR, LOG_NAME, build_all, merge_pdfs
 from rirekisho import DEFAULT_TEMPLATE
+from rirekisho.inputs import OUTPUT_FIELDS, default_fields, read_students
 from rirekisho.fonts import FontNotFoundError
 from rirekisho.model import InputError
 
@@ -47,6 +48,7 @@ class Options:
     merge: bool
     merge_name: str
     png: bool
+    fields: dict[str, bool]
 
 
 def open_in_explorer(path: Path) -> None:
@@ -64,7 +66,7 @@ class App(ttk.Frame):
     def __init__(self, master: tk.Tk):
         super().__init__(master, padding=12)
         master.title("履歴書PDF作成")
-        master.minsize(680, 560)
+        master.minsize(700, 620)
         self.grid(sticky="nsew")
         master.columnconfigure(0, weight=1)
         master.rowconfigure(0, weight=1)
@@ -79,6 +81,9 @@ class App(ttk.Frame):
         self.merge_name = tk.StringVar(value="履歴書まとめ.pdf")
         self.png = tk.BooleanVar(value=False)
         self.status = tk.StringVar(value="準備できました。")
+        self.field_vars = {
+            key: tk.BooleanVar(value=default) for key, _label, default in OUTPUT_FIELDS
+        }
 
         self._messages: queue.Queue[tuple[str, str]] = queue.Queue()
         self._snapshot: Options | None = None
@@ -88,6 +93,7 @@ class App(ttk.Frame):
 
         self._after_ids: list[str] = []
         self._build_widgets()
+        self.on_load_fields(quiet=True)
         self._refresh_options()
         self._after_ids.append(self.after(120, self._drain_messages))
         master.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -134,6 +140,24 @@ class App(ttk.Frame):
         )
 
         row += 1
+        fields = ttk.LabelFrame(self, text="PDFに反映する項目（チェックを外すとその欄は空欄になります）", padding=8)
+        fields.grid(row=row, column=0, columnspan=3, sticky="ew", pady=4)
+        columns = 4
+        for i, (key, label, _default) in enumerate(OUTPUT_FIELDS):
+            ttk.Checkbutton(fields, text=label, variable=self.field_vars[key]).grid(
+                row=i // columns, column=i % columns, sticky="w", padx=(0, 10)
+            )
+        edge = ttk.Frame(fields)
+        edge.grid(row=(len(OUTPUT_FIELDS) - 1) // columns + 1, column=0, columnspan=columns,
+                  sticky="w", pady=(6, 0))
+        ttk.Button(edge, text="すべて入れる", width=12,
+                   command=lambda: self._set_all_fields(True)).grid(row=0, column=0)
+        ttk.Button(edge, text="すべて外す", width=12,
+                   command=lambda: self._set_all_fields(False)).grid(row=0, column=1, padx=6)
+        ttk.Button(edge, text="シートの設定を読み込む", width=22,
+                   command=self.on_load_fields).grid(row=0, column=2)
+
+        row += 1
         buttons = ttk.Frame(self)
         buttons.grid(row=row, column=0, columnspan=3, sticky="ew", pady=10)
         self.build_button = tk.Button(
@@ -169,7 +193,7 @@ class App(ttk.Frame):
         )
 
         row += 1
-        self.log = tk.Text(self, height=16, wrap="word")
+        self.log = tk.Text(self, height=10, wrap="word")
         self.log.grid(row=row, column=0, columnspan=3, sticky="nsew", pady=(6, 0))
         scroll = ttk.Scrollbar(self, command=self.log.yview)
         scroll.grid(row=row, column=3, sticky="ns", pady=(6, 0))
@@ -190,6 +214,7 @@ class App(ttk.Frame):
         )
         if path:
             self.input_path.set(path)
+            self.on_load_fields(quiet=True)
 
     def _choose_outdir(self) -> None:
         path = filedialog.askdirectory(title="出力先フォルダを選ぶ", initialdir=self.out_dir.get())
@@ -251,6 +276,7 @@ class App(ttk.Frame):
             merge=self.merge.get(),
             merge_name=self.merge_name.get().strip(),
             png=self.png.get(),
+            fields={key: var.get() for key, var in self.field_vars.items()},
         )
 
     def _refresh_options(self) -> None:
@@ -294,6 +320,7 @@ class App(ttk.Frame):
                 only_name=only_name,
                 png=options.png,
                 report=reports,
+                fields=options.fields,
             )
 
             for report in reports:
@@ -345,6 +372,24 @@ class App(ttk.Frame):
         self._post("status", "エラーが出ました。内容を確認してください。")
         if manual:
             self._post("dialog", message)
+
+    def _set_all_fields(self, value: bool) -> None:
+        for var in self.field_vars.values():
+            var.set(value)
+
+    def on_load_fields(self, quiet: bool = False) -> None:
+        """入力シートの「反映項目」シートの○×をチェックボックスに読み込む。"""
+        try:
+            fields = read_students(self.input_path.get()).fields
+        except Exception as exc:  # 読めなくても画面は動かす
+            if not quiet:
+                messagebox.showinfo("履歴書PDF作成", f"反映項目を読み込めませんでした: {exc}")
+            return
+        for key, value in {**default_fields(), **fields}.items():
+            if key in self.field_vars:
+                self.field_vars[key].set(value)
+        if not quiet:
+            self._write("入力シートの「反映項目」を読み込みました。")
 
     # ------------------------------------------------------------ 自動更新
     def on_toggle_watch(self) -> None:

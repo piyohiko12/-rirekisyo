@@ -29,6 +29,7 @@ SHEET_NAME = "入力"
 SETTINGS_SHEET = "設定"
 MASTER_SHEET = "資格マスタ"
 PASTE_SHEET = "資格取込"
+FIELDS_SHEET = "反映項目"
 PASTE_FIRST_ROW = 6  # 貼り付けを始める行
 
 MAX_LICENSE_SLOTS = 6     # 資格の入力枠（用紙は5行だが多めに入力できる）
@@ -166,6 +167,49 @@ DEFAULT_MASTER = [
 ]
 
 
+# PDFに反映する項目（キー, 画面やシートに出す名前, 既定で反映するか）
+OUTPUT_FIELDS = [
+    ("name", "氏名", True),
+    ("name_kana", "ふりがな（氏名）", True),
+    ("birth", "生年月日・満○歳", True),
+    ("zip", "郵便番号", True),
+    ("address", "住所", True),
+    ("address_kana", "ふりがな（住所）", True),
+    ("contact", "連絡先（「同上」を含む）", True),
+    ("licenses", "資格等", True),
+    ("activities", "校内外の諸活動", True),
+    ("motivation", "志望の動機", True),
+    ("desired_job", "希望の職種", True),
+    ("appeal", "アピールポイント", True),
+    ("jobs", "職歴", True),
+    ("remarks", "備考", True),
+]
+
+ON_MARKS = {"○", "◯", "〇", "o", "yes", "true", "1", "はい", "on", "●", "✓", "レ"}
+OFF_MARKS = {"×", "x", "no", "false", "0", "いいえ", "off", "-", "―", "ー"}
+
+
+def default_fields() -> dict[str, bool]:
+    """既定の反映設定（すべて反映）。"""
+    return {key: default for key, _label, default in OUTPUT_FIELDS}
+
+
+def parse_mark(value, default: bool = True) -> bool:
+    """「○／×」などの記号を True / False にする。"""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if not text:
+        return default
+    if text in ON_MARKS:
+        return True
+    if text in OFF_MARKS:
+        return False
+    return default
+
+
 @dataclass
 class Student:
     """入力シートの1行（生徒1人分）。"""
@@ -205,11 +249,13 @@ def write_template(
     rows: int = ROSTER_ROWS,
     settings: dict[str, object] | None = None,
     paste_lines: list[str] | None = None,
+    fields: dict[str, bool] | None = None,
 ) -> Path:
     """名列順の入力用 .xlsx を生成する。"""
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
     from openpyxl.utils import get_column_letter
+    from openpyxl.worksheet.datavalidation import DataValidation
 
     path = Path(path)
     cols = columns()
@@ -299,6 +345,33 @@ def write_template(
     st.column_dimensions["B"].width = 20
     st.column_dimensions["C"].width = 52
     st.column_dimensions["D"].hidden = True
+
+    # 反映項目（PDFに出す項目を○×で選ぶ）
+    fields = {**default_fields(), **(fields or {})}
+    fs = wb.create_sheet(FIELDS_SHEET)
+    fs.cell(row=1, column=1, value="反映項目（PDFに出す項目を選びます）").font = Font(size=12, bold=True)
+    fs.cell(
+        row=2,
+        column=1,
+        value="B列を「○」にした項目だけをPDFに書き込みます。「×」にすると、入力してあっても"
+        "その欄は空欄のまま印刷されます（入力シートの値は消えません）。",
+    ).font = small
+    for col, label in ((1, "項目"), (2, "反映する（○／×）")):
+        cell = fs.cell(row=3, column=col, value=label)
+        cell.fill, cell.border, cell.font = header_fill, border, Font(size=10, bold=True)
+    marks = DataValidation(type="list", formula1='"○,×"', allow_blank=True)
+    fs.add_data_validation(marks)
+    for i, (key, label, _default) in enumerate(OUTPUT_FIELDS, start=4):
+        fs.cell(row=i, column=1, value=label).border = border
+        cell = fs.cell(row=i, column=2, value="○" if fields.get(key, True) else "×")
+        cell.fill, cell.border = input_fill, border
+        cell.alignment = Alignment(horizontal="center")
+        marks.add(cell)
+        fs.cell(row=i, column=3, value=key)
+    fs.column_dimensions["A"].width = 26
+    fs.column_dimensions["B"].width = 18
+    fs.column_dimensions["C"].hidden = True
+    fs.freeze_panes = "A4"
 
     # 資格マスタ
     ms = wb.create_sheet(MASTER_SHEET)
@@ -395,6 +468,11 @@ USAGE_LINES = [
     "   python build_pdf.py --merge 3年2組_履歴書.pdf … 全員を1つのPDFにまとめる（印刷用）",
     "   python watch.py                … 保存するたび自動で作り直す",
     "",
+    "■ PDFに出す項目を選ぶ",
+    "「反映項目」シートで、項目ごとに ○（出す）／×（出さない）を選べます。",
+    "×にした欄は、入力してあってもPDFでは空欄のままになります（入力シートの値は消えません）。",
+    "画面（履歴書PDF作成）のチェックボックスでも、その場で切り替えられます。",
+    "",
     "■ 自動で入る項目",
     "・満○歳 … 生年月日と基準日から自動計算します。",
     "・元号（昭和／平成／令和） … 生年月日から自動判定します。",
@@ -417,6 +495,7 @@ class InputData:
 
     students: list[Student] = field(default_factory=list)
     settings: dict[str, object] = field(default_factory=dict)
+    fields: dict[str, bool] = field(default_factory=default_fields)
     master_pairs: list[tuple[object, object]] = field(default_factory=list)
     paste_lines: list[str] = field(default_factory=list)
 
@@ -448,6 +527,11 @@ def _read_xlsx(path: Path) -> InputData:
         for row in wb[SETTINGS_SHEET].iter_rows(values_only=True):
             if len(row) >= 4 and isinstance(row[3], str) and row[3].strip():
                 data.settings[row[3].strip()] = row[1]
+
+    if FIELDS_SHEET in wb.sheetnames:
+        for row in wb[FIELDS_SHEET].iter_rows(values_only=True):
+            if len(row) >= 3 and isinstance(row[2], str) and row[2].strip() in data.fields:
+                data.fields[row[2].strip()] = parse_mark(row[1])
 
     if MASTER_SHEET in wb.sheetnames:
         for i, row in enumerate(wb[MASTER_SHEET].iter_rows(values_only=True), start=1):

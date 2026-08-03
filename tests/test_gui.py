@@ -78,3 +78,39 @@ def test_missing_input_is_reported_without_crashing(app, tmp_path, monkeypatch):
         time.sleep(0.05)
     app.master.update()
     assert "エラー" in app.status.get()
+
+
+def test_field_checkboxes_are_applied(app, tmp_path):
+    sheet = tmp_path / "入力シート.xlsx"
+    write_template(sheet, students=SAMPLE_STUDENTS)
+    app.input_path.set(str(sheet))
+    app.out_dir.set(str(tmp_path / "出力"))
+    app.field_vars["remarks"].set(False)   # 備考を反映しない
+    app.field_vars["contact"].set(False)   # 連絡先（同上）も出さない
+    app.only_no.set("1")
+    app.target.set("no")
+
+    app.on_build()
+    for _ in range(400):
+        app.master.update()
+        if not app._busy:
+            break
+        time.sleep(0.05)
+    app.master.update()
+
+    import fitz
+
+    text = fitz.open(tmp_path / "出力" / "3年2組_01_佐野太郎.pdf")[0].get_text()
+    assert "佐野" in text
+    assert "普通自動車免許は卒業後に取得予定です。" not in text  # 備考は出ない
+    assert "同上" not in text
+
+
+def test_load_fields_from_sheet(app, tmp_path):
+    sheet = tmp_path / "入力シート.xlsx"
+    write_template(sheet, fields={"jobs": False, "appeal": False})
+    app.input_path.set(str(sheet))
+    app.on_load_fields(quiet=True)
+    assert app.field_vars["jobs"].get() is False
+    assert app.field_vars["appeal"].get() is False
+    assert app.field_vars["name"].get() is True
