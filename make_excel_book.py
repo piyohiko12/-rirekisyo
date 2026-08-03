@@ -54,7 +54,6 @@ IMPORT_SLOTS = 8         # 1人が取り込める件数
 GUIDE = "使い方"
 ZIPCODES = "郵便番号"
 FORM_SHEET = "履歴書"
-FORM_SHEET_MANY = "履歴書（資格が多い人）"
 BLOCK_ROWS = 91          # 履歴書1人分の行数（1ページ）
 ZIP_PREFECTURES = ("大阪府", "和歌山県", "奈良県")
 
@@ -64,7 +63,7 @@ LICENSE_SLOTS = 6         # 「入力」シートの資格の枠数
 GATHER_SLOTS = 14         # 資格集約の1人分の行数（手入力6＋取込8）
 LICENSE_ROWS_ON_FORM = 10  # 用紙の資格欄に出す行数（欄からあふれる分は印字しない）
 CALC_LICENSE_COL = 15                                          # 計算シートの資格欄の開始列
-CALC_LICENSE_MAX = 13                                             # 計算シートが持つ資格の件数
+CALC_LICENSE_MAX = LICENSE_ROWS_ON_FORM                           # 計算シートが持つ資格の件数
 CALC_AFTER_LICENSE = CALC_LICENSE_COL + CALC_LICENSE_MAX * 2      # 諸活動から先の開始列
 GATHER_FIRST_ROW = 3
 
@@ -108,12 +107,8 @@ LICENSE_ROW_BANDS = [(9 + i * 2, 10 + i * 2) for i in range(LICENSE_ROWS_ON_FORM
 LICENSE_FONT_SIZE = 11.0
 BODY_FONT_SIZE = 11.0        # 校内外の諸活動・志望の動機・備考
 
-# 資格が10件を超える生徒用（同じ欄を13件に割り付け、文字を小さくする）
-LICENSE_AREA_ROWS = (9, 29)
-MANY_ROWS_ON_FORM = 13
-MANY_ROW_BANDS = [(9 + i, 9 + i) for i in range(MANY_ROWS_ON_FORM)]
-MANY_ROW_HEIGHT = 6.75 * 21 / MANY_ROWS_ON_FORM
-MANY_FONT_SIZE = 8.5
+# 用紙の行は左側の欄（氏名・生年月日・現住所）と共有しているため、
+# 資格欄だけ行の高さを変えると様式全体が崩れる。行の高さは変えない。
 JOB_ROW_BANDS = [(64, 69), (70, 75), (76, 81), (82, 87)]
 JOB_YEAR_COLS = ("P", "R")
 JOB_MONTH_COLS = ("U", "V")
@@ -324,36 +319,16 @@ def build_settings(wb) -> None:
     for row in ws["A12:C13"]:
         for cell in row:
             cell.border = Border(*(Side(style="medium", color="1F4E79"),) * 4)
-    ws.merge_cells("A15:C16")
-    button2 = ws["A15"]
-    button2.value = "▶ 資格が多い人はこちら（11件以上）"
-    button2.font = Font(size=12, bold=True, color="FFFFFF")
-    button2.fill = PatternFill("solid", fgColor="6B8E23")
-    button2.alignment = Alignment(horizontal="center", vertical="center")
-    button2.hyperlink = Hyperlink(ref="A15", location=f"'{FORM_SHEET_MANY}'!A1",
-                                  display="資格が多い人")
-    for row in ws["A15:C16"]:
-        for cell in row:
-            cell.border = Border(*(Side(style="medium", color="4F6228"),) * 4)
-    ws.row_dimensions[15].height = 20
-    ws.row_dimensions[16].height = 20
-
-    ws["A18"] = (
+    ws["A14"] = (
         "上の番号を入れてからボタンを押すと履歴書シートへ移動します。"
         "そのまま Ctrl+P（ファイル → 印刷／PDFで保存）を押すと、指定した範囲だけが出ます。"
     )
-    ws["A18"].font = small
-    ws["A19"] = (
+    ws["A14"].font = small
+    ws["A15"] = (
         "※ 範囲がうまく反映されないときは、印刷画面の「ページ指定」に同じ番号を入れてください"
         "（1ページ＝生徒1人・ページ番号＝No）。"
     )
-    ws["A19"].font = small
-    ws["A20"] = (
-        "※ 資格が10件までは「履歴書」シート（11ポイント）で印刷します。"
-        "11件以上ある生徒は「履歴書（資格が多い人）」シートを使うと、"
-        "欄の高さと文字を小さくして13件まで印字できます。"
-    )
-    ws["A20"].font = small
+    ws["A15"].font = small
     ws.row_dimensions[12].height = 22
     ws.row_dimensions[13].height = 22
 
@@ -731,9 +706,8 @@ def build_guide(wb) -> None:
         "",
         "2.「履歴書」シートが、そのまま印刷する用紙です（1人＝1ページ・上から入力シートのNo順）。",
         "   画面をスクロールすれば、印刷前に全員分を確認できます。",
-        "   ・資格は10件までを11ポイントで印字します。",
-        "   ・11件以上ある生徒は「履歴書（資格が多い人）」シートを使ってください。",
-        "     欄の高さと文字を小さくして、13件まで印字します（そのほかの欄は同じです）。",
+        "   ・資格は取得年月の古い順に10件まで、11ポイントで印字します。",
+        "     （用紙の欄の高さで決まっているため、11件以上は印字できません）",
         "",
         "3. 印刷・PDFにする（No.○ から No.○ まで）",
         "   ①「設定」シートの【開始No】【終了No】に番号を入れます（1人だけなら同じ番号）。",
@@ -860,12 +834,10 @@ def fill_form(ws, i: int, offset: int = 0, *, bands=None, license_size=None) -> 
                  calc(text_col), size=BODY_FONT_SIZE, indent=1, wrap=True)
 
 
-def build_form_sheet(wb, src, title: str = FORM_SHEET, *, bands=None, license_size=None,
-                     row_height: float | None = None) -> None:
+def build_form_sheet(wb, src, title: str = FORM_SHEET, *, bands=None, license_size=None) -> None:
     """1枚の履歴書シートに、生徒40人分を縦に並べる（1人＝1ページ）。
 
-    row_height を渡すと、資格欄の行の高さを組み替える（合計は変えないので
-    下の欄の位置はずれない）。
+    用紙の行の高さは変えない（左の欄と行を共有しているため）。
     """
     from copy import copy
 
@@ -898,13 +870,6 @@ def build_form_sheet(wb, src, title: str = FORM_SHEET, *, bands=None, license_si
             ws.row_dimensions[r + offset].height = (
                 dim.height if dim is not None and dim.height else default_height
             )
-        if row_height:      # 資格欄の行を組み替える（合計の高さは変えない）
-            first_row, last_row = LICENSE_AREA_ROWS
-            rows_used = len(bands or LICENSE_ROW_BANDS)
-            for k in range(rows_used):
-                ws.row_dimensions[first_row + k + offset].height = row_height
-            for r in range(first_row + rows_used, last_row + 1):
-                ws.row_dimensions[r + offset].height = 0
         for rng in merges:
             ws.merge_cells(shift(rng, offset))
         fill_form(ws, i, offset, bands=bands, license_size=license_size)
@@ -976,7 +941,7 @@ def build_calc(wb) -> None:
         def ref(key: str) -> str:
             return f"{ROSTER}!${roster_col(key)}${r}"
 
-        birth = f"${get_column_letter(CALC_AFTER_LICENSE + 8)}${row}"  # 変換済みの生年月日
+        birth = f"${get_column_letter(CALC_AFTER_LICENSE + 10)}${row}"  # 変換済みの生年月日
 
         # 用紙の数字欄はとても狭いので、数値ではなく文字として出す（### 対策）
         as_text = {4, 5, 6, 7,
@@ -1033,7 +998,7 @@ def build_calc(wb) -> None:
                 f'IF({ref("appeal")}="","",{ref("appeal")}))')
         put(CALC_AFTER_LICENSE + 2, guard("remarks", ref("remarks")))
 
-        work = CALC_AFTER_LICENSE + 8          # 作業列（生年月日・職歴年月）
+        work = CALC_AFTER_LICENSE + 10         # 作業列（生年月日・職歴年月）
         for k in (1, 2):
             job_ym = f"${get_column_letter(work + k)}${row}"
             base_col = CALC_AFTER_LICENSE + 3 + (k - 1) * 3
@@ -1055,7 +1020,7 @@ def build_calc(wb) -> None:
                     CALC_AFTER_LICENSE + 6, CALC_AFTER_LICENSE + 7):
             ws.cell(row=row, column=col).number_format = "General"
 
-    for i in range(CALC_AFTER_LICENSE + 8, CALC_AFTER_LICENSE + 11):
+    for i in range(CALC_AFTER_LICENSE + 10, CALC_AFTER_LICENSE + 13):
         ws.column_dimensions[get_column_letter(i)].hidden = True
     ws.sheet_state = "hidden"
 
@@ -1069,11 +1034,9 @@ def build(official: Path, out: Path, students: list[dict] | None = None,
     form._charts = []
 
     build_form_sheet(wb, form)
-    build_form_sheet(wb, form, FORM_SHEET_MANY, bands=MANY_ROW_BANDS,
-                     license_size=MANY_FONT_SIZE, row_height=MANY_ROW_HEIGHT)
     del wb[FORM_SHEET_SRC]
     for name in list(wb.sheetnames):
-        if name not in (FORM_SHEET, FORM_SHEET_MANY):
+        if name != FORM_SHEET:
             del wb[name]
 
     build_roster(wb, students)
@@ -1088,12 +1051,12 @@ def build(official: Path, out: Path, students: list[dict] | None = None,
     build_guide(wb)
 
     order = [GUIDE, ROSTER, PASTE, SETTINGS, FIELDS, COURSES, MASTER,
-             FORM_SHEET, FORM_SHEET_MANY, GATHER, CALC, ZIPCODES]
+             FORM_SHEET, GATHER, CALC, ZIPCODES]
     wb._sheets.sort(key=lambda ws: order.index(ws.title) if ws.title in order else 99)
     wb.active = 0
     out.parent.mkdir(parents=True, exist_ok=True)
     wb.save(out)
-    _attach_drawings(official, out, [FORM_SHEET, FORM_SHEET_MANY])
+    _attach_drawings(official, out, [FORM_SHEET])
     return out
 
 
