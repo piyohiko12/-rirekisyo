@@ -61,7 +61,7 @@ ROSTER_FIRST_ROW = 5      # 生徒1人目の行
 STUDENTS = 40             # 履歴書シートの枚数
 LICENSE_SLOTS = 6         # 「入力」シートの資格の枠数
 GATHER_SLOTS = 14         # 資格集約の1人分の行数（手入力6＋取込8）
-LICENSE_ROWS_ON_FORM = 10  # 用紙の資格欄に出す行数（欄からあふれる分は印字しない）
+LICENSE_ROWS_ON_FORM = GATHER_SLOTS  # 用紙の資格欄に流し込む件数（全件）
 CALC_LICENSE_COL = 15                                          # 計算シートの資格欄の開始列
 CALC_LICENSE_MAX = LICENSE_ROWS_ON_FORM                           # 計算シートが持つ資格の件数
 CALC_AFTER_LICENSE = CALC_LICENSE_COL + CALC_LICENSE_MAX * 2      # 諸活動から先の開始列
@@ -101,14 +101,13 @@ MOTIVATION_CELL = "BW47:DU75"
 REMARKS_CELL = "BW76:DU87"
 LICENSE_YM_COLS = ("BW", "CG")
 LICENSE_NAME_COLS = ("CH", "DU")
-# 資格欄は用紙の行9〜29。用紙の行の高さ（6.75pt）は変えずに2行ずつ使う
-# （1件あたり13.5pt）。10件を超える分は欄に入らないので印字しない。
-LICENSE_ROW_BANDS = [(9 + i * 2, 10 + i * 2) for i in range(LICENSE_ROWS_ON_FORM)]
 LICENSE_FONT_SIZE = 11.0
 BODY_FONT_SIZE = 11.0        # 校内外の諸活動・志望の動機・備考
 
 # 用紙の行は左側の欄（氏名・生年月日・現住所）と共有しているため、
-# 資格欄だけ行の高さを変えると様式全体が崩れる。行の高さは変えない。
+# 資格欄だけ行の高さを変えると様式全体が崩れる。行の高さは一切変えない。
+LICENSE_AREA_ROWS = (9, 29)          # 資格欄（この範囲を1つの高いセルとして使う）
+LICENSE_AREA_HEIGHT = 6.75 * 21      # 資格欄の高さ(pt)
 JOB_ROW_BANDS = [(64, 69), (70, 75), (76, 81), (82, 87)]
 JOB_YEAR_COLS = ("P", "R")
 JOB_MONTH_COLS = ("U", "V")
@@ -690,10 +689,217 @@ def build_zipcodes(wb) -> None:
     print(f"郵便番号: {len(rows)}件")
 
 
+MACRO_SHEET = "マクロ"
+
+
+def vba_range(ref: str) -> str:
+    """'BW30:DU46' → '"BW" & (30 + off) & ":DU" & (46 + off)' というVBAの式にする。"""
+    parts = []
+    for cell in ref.split(":"):
+        m = re.fullmatch(r"([A-Z]+)(\d+)", cell)
+        parts.append(f'"{m.group(1)}" & ({m.group(2)} + off)')
+    return ' & ":" & '.join(parts)
+
+
+def macro_code() -> list[str]:
+    """履歴書の文字を内容の量に合わせて整えるVBA。"""
+    license_ym = f"{LICENSE_YM_COLS[0]}{LICENSE_AREA_ROWS[0]}:{LICENSE_YM_COLS[1]}{LICENSE_AREA_ROWS[1]}"
+    license_name = f"{LICENSE_NAME_COLS[0]}{LICENSE_AREA_ROWS[0]}:{LICENSE_NAME_COLS[1]}{LICENSE_AREA_ROWS[1]}"
+    return f"""Option Explicit
+
+' ============================================================
+'  履歴書の文字を整える
+'
+'  資格の件数や文章の長さに合わせて、文字の大きさだけを自動で調整します。
+'  行の高さ・列の幅・枠（画像）は一切変えないので、様式は崩れません。
+'  基本（最大）は11ポイント。入りきらないときだけ小さくします。
+'
+'  使い方: Alt + F8 →「履歴書の文字を整える」→ 実行
+' ============================================================
+
+Private Const SHEET_FORM As String = "{FORM_SHEET}"
+Private Const BLOCK_ROWS As Long = {BLOCK_ROWS}      ' 1人分の行数（1ページ）
+Private Const STUDENT_COUNT As Long = {STUDENTS}     ' 名簿の人数
+Private Const MAX_PT As Double = {BODY_FONT_SIZE}    ' 基本（最大）の文字の大きさ
+Private Const MIN_PT As Double = 6                  ' これより小さくはしない
+
+Public Sub 履歴書の文字を整える()
+    If 文字を整える実行() Then
+        MsgBox "履歴書の文字を整えました。" & vbLf & _
+               "入力を変えたら、もう一度実行してください。", vbInformation
+    End If
+End Sub
+
+Public Function 文字を整える実行() As Boolean
+    Dim frm As Worksheet
+    Dim i As Long, off As Long
+    Dim 年月 As Range, 名称 As Range
+    Dim pt As Double, pt2 As Double
+
+    On Error GoTo エラー
+    Set frm = ThisWorkbook.Worksheets(SHEET_FORM)
+    Application.ScreenUpdating = False
+
+    For i = 1 To STUDENT_COUNT
+        off = (i - 1) * BLOCK_ROWS
+
+        ' --- 資格等（取得年月と名称は、行がずれないよう同じ大きさにそろえる）
+        Set 年月 = frm.Range({vba_range(license_ym)})
+        Set 名称 = frm.Range({vba_range(license_name)})
+        pt = 収まる大きさ(年月)
+        pt2 = 収まる大きさ(名称)
+        If pt2 < pt Then pt = pt2
+        年月.Font.Size = pt
+        名称.Font.Size = pt
+
+        ' --- 校内外の諸活動・志望の動機・備考
+        文字を合わせる frm.Range({vba_range(ACTIVITIES_CELL)})
+        文字を合わせる frm.Range({vba_range(MOTIVATION_CELL)})
+        文字を合わせる frm.Range({vba_range(REMARKS_CELL)})
+    Next i
+
+    Application.ScreenUpdating = True
+    文字を整える実行 = True
+    Exit Function
+
+エラー:
+    Application.ScreenUpdating = True
+    MsgBox "うまくいきませんでした: " & Err.Description, vbExclamation
+End Function
+
+Private Sub 文字を合わせる(対象 As Range)
+    対象.Font.Size = 収まる大きさ(対象)
+End Sub
+
+' 欄（対象）に文章がちょうど収まる文字の大きさを返す。
+' 欄の高さ・幅はExcelから実寸（ポイント）で取るので、様式に合わせて自動で決まる。
+Private Function 収まる大きさ(対象 As Range) As Double
+    Dim v As Variant, s As String
+    Dim pt As Double, 高さ As Double, 幅 As Double
+
+    収まる大きさ = MAX_PT
+    v = 対象.Cells(1, 1).Value
+    If IsError(v) Then Exit Function
+    s = CStr(v)
+    If Len(s) = 0 Then Exit Function
+
+    高さ = 対象.Height - 2                     ' 上下の余白
+    For pt = MAX_PT To MIN_PT Step -0.5
+        幅 = 対象.Width - 対象.Cells(1, 1).IndentLevel * pt - 4
+        If 幅 < pt Then 幅 = pt
+        If 行数(s, 幅, pt) * pt * 1.32 <= 高さ Then Exit For
+    Next pt
+    If pt < MIN_PT Then pt = MIN_PT
+    収まる大きさ = pt
+End Function
+
+' 幅(ポイント)と文字の大きさから、折り返しを含めた行数を数える。
+Private Function 行数(s As String, 幅 As Double, pt As Double) As Long
+    Dim 一行の幅 As Double, 合計 As Long, 段落 As Variant, w As Double
+    一行の幅 = 幅 / pt                          ' 全角何文字ぶんか
+    If 一行の幅 < 1 Then 一行の幅 = 1
+    合計 = 0
+    For Each 段落 In Split(s, vbLf)
+        w = 文字幅(CStr(段落))
+        If w < 1 Then w = 1
+        合計 = 合計 + Int((w - 0.001) / 一行の幅) + 1
+    Next 段落
+    行数 = 合計
+End Function
+
+' 文字列の幅を「全角何文字ぶん」で返す（半角は0.5文字ぶん）。
+Private Function 文字幅(s As String) As Double
+    Dim i As Long, c As Long, w As Double
+    For i = 1 To Len(s)
+        c = AscW(Mid$(s, i, 1))
+        If c >= 0 And c < 128 Then
+            w = w + 0.5
+        ElseIf c >= &HFF61 And c <= &HFF9F Then  ' 半角カタカナ
+            w = w + 0.5
+        Else
+            w = w + 1
+        End If
+    Next i
+    文字幅 = w
+End Function
+""".splitlines()
+
+
+THISWORKBOOK_CODE = """Private Sub Workbook_BeforePrint(Cancel As Boolean)
+    ' 印刷・PDF出力の直前に、文字の大きさを自動でそろえる
+    Application.EnableEvents = False
+    On Error Resume Next
+    文字を整える実行
+    On Error GoTo 0
+    Application.EnableEvents = True
+End Sub
+""".splitlines()
+
+
+MACRO_STEPS = [
+    "■ マクロを入れると、資格の件数や文章の長さに合わせて、文字の大きさが自動で決まります",
+    "　・基本（最大）は11ポイント。欄に入りきらないときだけ小さくします（最小6ポイント）。",
+    "　・変えるのは文字の大きさだけです。行の高さ・列の幅・枠（画像）は触らないので様式は崩れません。",
+    "　・資格が10件を超えても、小さくして全部印字できます。",
+    "",
+    "① このファイルを「マクロ有効ブック」で保存し直す",
+    "　　ファイル → 名前を付けて保存 → ファイルの種類を「Excel マクロ有効ブック (*.xlsm)」にして保存",
+    "",
+    "② Alt + F11 を押す（VBAの画面が開きます）",
+    "　　メニューの「挿入」→「標準モジュール」をクリック（白い画面が出ます）",
+    "",
+    "③ このシートの C列 を、列の見出し「C」をクリックしてまるごと選び、コピー（Ctrl + C）",
+    "　　②で出た白い画面をクリックして、貼り付け（Ctrl + V）",
+    "",
+    "④ Alt + Q で元の画面に戻り、上書き保存（Ctrl + S）",
+    "",
+    "⑤ Alt + F8 →「履歴書の文字を整える」を選んで「実行」",
+    "　　これで全員分の文字の大きさがそろいます（数秒で終わります）。",
+    "",
+    "※ 一度 ①〜④ をすればコードは保存されます。次からは ⑤ だけでOKです。",
+    "※ 入力を変えたら、印刷の前に ⑤ をもう一度実行してください。",
+    "",
+    "◆ 印刷の前に自動で実行させたいとき（任意・E列のコードを使います）",
+    "　　Alt + F11 → 左側の一覧から「ThisWorkbook」をダブルクリック →",
+    "　　E列をコピーして貼り付け → Alt + Q → 上書き保存。",
+    "　　これで、印刷・PDF出力の直前に自動でそろうので ⑤ が要らなくなります。",
+    "",
+    "※ マクロを入れなくても、これまでどおり11ポイントで印刷できます",
+    "　（そのときは、欄に入りきらない資格は印字されません）。",
+]
+
+
+def build_macro_sheet(wb) -> None:
+    """「マクロ」シート: 手順と、貼り付け用のVBAコード。"""
+    ws = wb.create_sheet(MACRO_SHEET)
+    ws["A1"] = "文字の大きさを自動でそろえる（マクロ版・任意）"
+    ws["A1"].font = Font(size=13, bold=True)
+    heads = ("■", "①", "②", "③", "④", "⑤", "◆")
+    for i, line in enumerate(MACRO_STEPS, start=3):
+        cell = ws.cell(row=i, column=1, value=line)
+        if line[:1] in heads:
+            cell.font = Font(bold=True)
+    mono = Font(name="ＭＳ ゴシック", size=9)
+    note = Font(size=9, color="666666")
+    ws["C1"] = "↓ ③で貼り付ける（この列をまるごとコピー）"
+    ws["C1"].font = note
+    for i, line in enumerate(macro_code(), start=2):
+        ws.cell(row=i, column=3, value=line).font = mono
+    ws["E1"] = "↓ ◆で貼り付ける（任意・ThisWorkbook 用）"
+    ws["E1"].font = note
+    for i, line in enumerate(THISWORKBOOK_CODE, start=2):
+        ws.cell(row=i, column=5, value=line).font = mono
+    ws.column_dimensions["A"].width = 84
+    ws.column_dimensions["C"].width = 82
+    ws.column_dimensions["E"].width = 56
+    ws.sheet_view.showGridLines = False
+
+
 def build_guide(wb) -> None:
     ws = wb.create_sheet(GUIDE, 0)
     lines = [
-        "■ このファイルの使い方（Excelだけで完結します。マクロもPythonも使いません）",
+        "■ このファイルの使い方（Excelだけで完結します。Pythonなどは使いません）",
+        "　　文字の大きさを自動でそろえたいときは、「マクロ」シートを見てください（任意）。",
         "",
         "1.「入力」シートに、名列順で生徒の情報を入力します（黄色いセル）。",
         "   ・学科は6種類からドロップダウンで選べます（空欄なら「設定」の既定の学科）。",
@@ -706,8 +912,9 @@ def build_guide(wb) -> None:
         "",
         "2.「履歴書」シートが、そのまま印刷する用紙です（1人＝1ページ・上から入力シートのNo順）。",
         "   画面をスクロールすれば、印刷前に全員分を確認できます。",
-        "   ・資格は取得年月の古い順に10件まで、11ポイントで印字します。",
-        "     （用紙の欄の高さで決まっているため、11件以上は印字できません）",
+        "   ・資格は取得年月の古い順に、11ポイントで印字します。",
+        "     （用紙の欄の高さは変えられないので、欄に入りきらない分は表示されません。",
+        "　　　 資格が多い生徒がいるときは「マクロ」シートの手順で自動縮小をONにしてください）",
         "",
         "3. 印刷・PDFにする（No.○ から No.○ まで）",
         "   ①「設定」シートの【開始No】【終了No】に番号を入れます（1人だけなら同じ番号）。",
@@ -725,7 +932,7 @@ def build_guide(wb) -> None:
         "   ・学年-組-出席番号 → 氏名 → 資格名 → 取得日 の順（区切りは空白でもタブでも可）",
         "   ・先頭の番号がないときは氏名で照合します。",
         "   ・「状態」の列に 反映／重複／要確認 が出るので、要確認の行だけ直してください。",
-        "   ・手入力した資格と合わせて、取得年月の古い順に並べて印字します（最大10件）。",
+        "   ・手入力した資格と合わせて、取得年月の古い順に並べて印字します（最大14件）。",
         "",
         "■ 各シートの役割",
         "・入力　　　… 生徒の情報（1行＝1生徒）",
@@ -735,6 +942,7 @@ def build_guide(wb) -> None:
         "・学科マスタ… 在籍校欄に出る学科（6種類）",
         "・資格取込　… 資格一覧を貼り付けると、名簿と照合して自動で振り分けます",
         "・資格マスタ… 入力した資格名を正式名称に直す変換表",
+        "・マクロ　　… 文字の大きさを自動でそろえるVBA（任意・入れなくても使えます）",
         "・資格集約／計算／郵便番号 … 自動計算用（非表示・さわらないでください）",
         "",
         "■ 自動で入るもの",
@@ -743,8 +951,15 @@ def build_guide(wb) -> None:
         "・郵便番号　… 7桁の数字だけでも 123-4567 の形にします。",
         "・住所のふりがな … 郵便番号から自動で入ります（手で入れた場合はそちらが優先）。",
         "・連絡先　　… 空欄なら「同上」。",
-        "・資格　　　… 取得年月の古い順に並べ、資格マスタの正式名称で印字します（最大10件）。",
+        "・資格　　　… 取得年月の古い順に並べ、資格マスタの正式名称で印字します（最大14件）。",
         "・在籍校　　… 「設定」の学校名と、生徒ごとの学科を組み合わせます。",
+        "",
+        "■ 欄に入りきらないとき（資格・校内外の諸活動・志望の動機・備考）",
+        "・用紙の行の高さは左の欄と共有しているため、高さを変えると様式が崩れます。",
+        "　そのため、この4つの欄は「文字の大きさ」で調整します。",
+        "・「マクロ」シートの手順（5分ほど）を一度だけ行うと、Alt+F8 →「履歴書の文字を整える」で",
+        "　欄ごとに入りきる大きさ（最大11ポイント・最小6ポイント）へ自動でそろいます。",
+        "・マクロを使わない場合は、入力する文章を短くして調整してください。",
         "",
         "■ 注意",
         "・写真は印刷した用紙に貼ってください。",
@@ -765,12 +980,8 @@ def shift(ref: str, offset: int) -> str:
     return re.sub(r"([A-Z]+)(\d+)", lambda m: f"{m.group(1)}{int(m.group(2)) + offset}", ref)
 
 
-def fill_form(ws, i: int, offset: int = 0, *, bands=None, license_size=None) -> None:
-    """履歴書シートの記入欄に、「計算」シートを参照する数式を入れる。
-
-    bands / license_size で、資格欄の行の割り付けと文字サイズを変えられる。
-    """
-    bands = bands or LICENSE_ROW_BANDS
+def fill_form(ws, i: int, offset: int = 0, *, license_size=None) -> None:
+    """履歴書シートの記入欄に、「計算」シートを参照する数式を入れる。"""
     license_size = license_size or LICENSE_FONT_SIZE
     row = CALC_FIRST_ROW + i - 1
 
@@ -807,13 +1018,15 @@ def fill_form(ws, i: int, offset: int = 0, *, bands=None, license_size=None) -> 
     set_cell(ws, shift(TODAY_DAY_CELL, offset), f'=IF(N({base})=0,"",DAY({base}))&""',
              align="center", size=NARROW_NUM_SIZE)
 
-    for k, (row_top, row_bottom) in enumerate(bands, start=1):
-        ym_col = get_column_letter(CALC_LICENSE_COL + (k - 1) * 2)
-        name_col = get_column_letter(CALC_LICENSE_COL + (k - 1) * 2 + 1)
-        set_cell(ws, shift(f"{LICENSE_YM_COLS[0]}{row_top}:{LICENSE_YM_COLS[1]}{row_bottom}", offset),
-                 calc(ym_col), size=license_size, align="center")
-        set_cell(ws, shift(f"{LICENSE_NAME_COLS[0]}{row_top}:{LICENSE_NAME_COLS[1]}{row_bottom}", offset),
-                 calc(name_col), size=license_size, indent=1, shrink=True)
+    # 資格は「取得年月」「名称」それぞれ1つの高いセルに、改行でつないで流し込む。
+    # 行の高さを触らないので様式は崩れず、文字の大きさだけで件数に対応できる。
+    top_row, bottom_row = LICENSE_AREA_ROWS
+    list_ym = get_column_letter(CALC_AFTER_LICENSE + 13)
+    list_name = get_column_letter(CALC_AFTER_LICENSE + 14)
+    set_cell(ws, shift(f"{LICENSE_YM_COLS[0]}{top_row}:{LICENSE_YM_COLS[1]}{bottom_row}", offset),
+             calc(list_ym), size=license_size, align="center", valign="top", wrap=True)
+    set_cell(ws, shift(f"{LICENSE_NAME_COLS[0]}{top_row}:{LICENSE_NAME_COLS[1]}{bottom_row}", offset),
+             calc(list_name), size=license_size, valign="top", wrap=True, indent=1)
 
     set_cell(ws, shift(ACTIVITIES_CELL, offset), calc(get_column_letter(CALC_AFTER_LICENSE)),
              size=BODY_FONT_SIZE, valign="top", wrap=True, indent=1)
@@ -834,7 +1047,7 @@ def fill_form(ws, i: int, offset: int = 0, *, bands=None, license_size=None) -> 
                  calc(text_col), size=BODY_FONT_SIZE, indent=1, wrap=True)
 
 
-def build_form_sheet(wb, src, title: str = FORM_SHEET, *, bands=None, license_size=None) -> None:
+def build_form_sheet(wb, src, title: str = FORM_SHEET, *, license_size=None) -> None:
     """1枚の履歴書シートに、生徒40人分を縦に並べる（1人＝1ページ）。
 
     用紙の行の高さは変えない（左の欄と行を共有しているため）。
@@ -872,7 +1085,7 @@ def build_form_sheet(wb, src, title: str = FORM_SHEET, *, bands=None, license_si
             )
         for rng in merges:
             ws.merge_cells(shift(rng, offset))
-        fill_form(ws, i, offset, bands=bands, license_size=license_size)
+        fill_form(ws, i, offset, license_size=license_size)
         if i > 1:
             ws.row_breaks.append(Break(id=offset))
 
@@ -921,6 +1134,8 @@ def build_calc(wb) -> None:
         "諸活動", "志望の動機など", "備考",
         "職歴1年", "職歴1月", "職歴1内容", "職歴2年", "職歴2月", "職歴2内容",
     ]
+    for i, label in enumerate(("資格一覧(年月)", "資格一覧(名称)", "資格件数"), start=0):
+        ws.cell(row=2, column=CALC_AFTER_LICENSE + 13 + i, value=label).font = Font(size=9, bold=True)
     ws.cell(row=1, column=1, value="計算（自動・さわらないでください）").font = Font(size=12, bold=True)
     for i, label in enumerate(headers, start=1):
         ws.cell(row=2, column=i, value=label).font = Font(size=9, bold=True)
@@ -1008,6 +1223,20 @@ def build_calc(wb) -> None:
             put(base_col + 1, guard("jobs", f"MONTH({job_ym})", f'N({job_ym})=0'))
             put(base_col + 2, guard("jobs", ref(f"job.{k}.text")))
 
+        # 資格の一覧（改行でつないだもの）と件数。用紙では1つの高いセルに流し込む
+        ym_cells = [get_column_letter(CALC_LICENSE_COL + (k - 1) * 2) + str(row)
+                    for k in range(1, CALC_LICENSE_MAX + 1)]
+        name_cells = [get_column_letter(CALC_LICENSE_COL + (k - 1) * 2 + 1) + str(row)
+                      for k in range(1, CALC_LICENSE_MAX + 1)]
+        join_ym = "&".join([f"${ym_cells[0]}"] + [
+            f'IF(${c}="","",CHAR(10)&${c})' for c in ym_cells[1:]])
+        join_name = "&".join([f"${name_cells[0]}"] + [
+            f'IF(${c}="","",CHAR(10)&${c})' for c in name_cells[1:]])
+        count = "+".join(f'IF(${c}="",0,1)' for c in name_cells)
+        put(work + 3, f"={join_ym}")
+        put(work + 4, f"={join_name}")
+        put(work + 5, f"={count}")
+
         # 作業列（日付に変換したもの。和暦の文字で入力されていても読む）
         put(work, f"={to_date(ref('birth'))}")
         put(work + 1, f"={to_date(ref('job.1.ym'))}")
@@ -1048,10 +1277,11 @@ def build(official: Path, out: Path, students: list[dict] | None = None,
     build_gather(wb)
     build_calc(wb)
     build_zipcodes(wb)
+    build_macro_sheet(wb)
     build_guide(wb)
 
     order = [GUIDE, ROSTER, PASTE, SETTINGS, FIELDS, COURSES, MASTER,
-             FORM_SHEET, GATHER, CALC, ZIPCODES]
+             FORM_SHEET, MACRO_SHEET, GATHER, CALC, ZIPCODES]
     wb._sheets.sort(key=lambda ws: order.index(ws.title) if ws.title in order else 99)
     wb.active = 0
     out.parent.mkdir(parents=True, exist_ok=True)
