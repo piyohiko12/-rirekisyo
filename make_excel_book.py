@@ -116,6 +116,12 @@ def roster_col(key: str) -> str:
     raise KeyError(key)
 
 
+def master_lookup(name_ref: str) -> str:
+    """資格名を正式名称に直す式（空白の有無は無視して照合する）。"""
+    key = f'ASC(SUBSTITUTE(SUBSTITUTE({name_ref}," ",""),"　",""))'
+    return (f'IFERROR(INDEX({MASTER}!$B:$B,MATCH({key},{MASTER}!$D:$D,0)),{name_ref})')
+
+
 def field_cell(key: str) -> str:
     """「反映項目」シートで、その項目の○×セル（例: $B$4）を返す。"""
     for i, (field_key, _label, _default) in enumerate(OUTPUT_FIELDS, start=4):
@@ -346,18 +352,27 @@ def build_master(wb) -> None:
     for cell in (ws["A2"], ws["B2"]):
         cell.font = Font(size=10, bold=True)
     input_fill = PatternFill("solid", fgColor="FFFDE7")
+    ws["C2"] = "メモ"
+    ws["C2"].font = Font(size=10, bold=True)
+    ws["D2"] = "照合キー（自動）"
+    ws["D2"].font = Font(size=8, color="999999")
     for i, (src, dest) in enumerate(DEFAULT_MASTER, start=3):
         ws.cell(row=i, column=1, value=src).fill = input_fill
         ws.cell(row=i, column=2, value=dest).fill = input_fill
+    for i in range(3, 3 + max(len(DEFAULT_MASTER), 200)):
+        ws.cell(row=i, column=4,
+                value=f'=IF(A{i}="","",ASC(SUBSTITUTE(SUBSTITUTE(A{i}," ",""),"　","")))')
     ws.column_dimensions["A"].width = 36
     ws.column_dimensions["B"].width = 36
+    ws.column_dimensions["C"].width = 24
+    ws.column_dimensions["D"].hidden = True
     ws.freeze_panes = "A3"
 
 
 def _gather_common(ws, row: int, top: int, bottom: int) -> None:
     """資格集約の共通列（正式名称・並び順・順位・表示）。"""
     ws.cell(row=row, column=5,
-            value=f'=IF(D{row}="","",IFERROR(VLOOKUP(D{row},{MASTER}!$A:$B,2,FALSE),D{row}))')
+            value=f'=IF(D{row}="","",{master_lookup(f"D{row}")})')
     ws.cell(row=row, column=6, value=f'=IF(E{row}="","",IF(C{row}="",DATE(9999,1,1),C{row}))')
     ws.cell(row=row, column=7, value=(
         f'=IF(E{row}="","",COUNTIFS($F${top}:$F${bottom},"<"&F{row},'
@@ -427,7 +442,7 @@ def build_paste(wb, paste_lines: list[str] | None = None) -> None:
     )
     ws["A2"].font = small
     ws["A3"] = (
-        "書式: 3-2-15〔空白またはタブ〕山田太郎 基礎製図検定 令和6年7月10日"
+        "書式: 3-2-15〔空白またはタブ〕山田 太郎 基礎製図検定 令和6年7月10日"
         "　…学年-組-出席番号 → 氏名 → 資格名 → 取得日 の順。"
     )
     ws["A3"].font = small
@@ -479,18 +494,39 @@ def build_paste(wb, paste_lines: list[str] | None = None) -> None:
         ws.cell(row=row, column=15, value=(
             f'=IF({has_id}=0,"",IFERROR(VALUE(TRIM(RIGHT(SUBSTITUTE({ident},"-",REPT(" ",100)),100))),""))'
         ))
-        ws.cell(row=row, column=16, value=f'=IF({has_id}=1,{w[2]},{w[1]})')
+        # 氏名が「姓 名」と分かれていても正しく切り出せるよう、名簿と突き合わせる
+        span = f"$D{row}:$K{row}"
+        first_word = f"IF({has_id}=1,2,1)"
+        cand1 = f"INDEX({span},{first_word})"
+        cand2 = f"{cand1}&INDEX({span},{first_word}+1)"
+        cand3 = f"{cand2}&INDEX({span},{first_word}+2)"
+        roster_names = (f'{ROSTER}!${match_col}${ROSTER_FIRST_ROW}:'
+                        f'${match_col}${ROSTER_FIRST_ROW + STUDENTS - 1}')
+        by_number = (f'IFERROR(MATCH(O{row},{ROSTER}!$C${ROSTER_FIRST_ROW}:'
+                     f'$C${ROSTER_FIRST_ROW + STUDENTS - 1},0),"")')
+        ws.cell(row=row, column=28, value=f"={by_number}")           # 番号での照合
+        ws.cell(row=row, column=29, value=(                           # 名簿の氏名（空白なし）
+            f'=IF(AB{row}="","",INDEX({roster_names},AB{row}))'))
+        ws.cell(row=row, column=30, value=(                           # 氏名の語数
+            f'=IF({cand1}=AC{row},1,IF({cand2}=AC{row},2,IF({cand3}=AC{row},3,'
+            f'IF(AB{row}<>"",2,'
+            f'IF(ISNUMBER(MATCH({cand1},{roster_names},0)),1,'
+            f'IF(ISNUMBER(MATCH({cand2},{roster_names},0)),2,'
+            f'IF(ISNUMBER(MATCH({cand3},{roster_names},0)),3,2)))))))'))
+        words = f"AD{row}"
+        ws.cell(row=row, column=16, value=(
+            f'=IF({fmt}="","",TRIM(INDEX({span},{first_word})'
+            f'&IF({words}>=2," "&INDEX({span},{first_word}+1),"")'
+            f'&IF({words}>=3," "&INDEX({span},{first_word}+2),"")))'))
 
-        start = f"IF({has_id}=1,3,2)"
+        start = f"({first_word}+{words})"
         end = f'{count}-IF(S{row}="",0,1)'   # 取得日が読めた行は、最後の語を日付として外す
         parts = "&".join(
             f'IF(AND({k}>={start},{k}<={end}),{w[k]}&" ","")' for k in range(2, 9)
         )
         ws.cell(row=row, column=17, value=f'=IF({count}<2,"",TRIM({parts}))')
         licence = f"Q{row}"
-        ws.cell(row=row, column=18, value=(
-            f'=IF({licence}="","",IFERROR(VLOOKUP({licence},{MASTER}!$A:$B,2,FALSE),{licence}))'
-        ))
+        ws.cell(row=row, column=18, value=f'=IF({licence}="","",{master_lookup(licence)})')
 
         tail = f'INDEX({get_column_letter(4)}{row}:{get_column_letter(11)}{row},MIN(8,MAX(1,{count})))'
         norm = f"AA{row}"
@@ -514,10 +550,9 @@ def build_paste(wb, paste_lines: list[str] | None = None) -> None:
 
         number, name = f"O{row}", f"P{row}"
         ws.cell(row=row, column=20, value=(
-            f'=IF({fmt}="","",IFERROR(MATCH({number},{ROSTER}!$C${ROSTER_FIRST_ROW}:'
-            f'$C${ROSTER_FIRST_ROW + STUDENTS - 1},0),'
+            f'=IF({fmt}="","",IF(AB{row}<>"",AB{row},'
             f'IFERROR(MATCH(SUBSTITUTE(SUBSTITUTE({name}," ",""),"　",""),'
-            f'{ROSTER}!${match_col}${ROSTER_FIRST_ROW}:${match_col}${ROSTER_FIRST_ROW + STUDENTS - 1},0),"")))'
+            f'{roster_names},0),"")))'
         ))
         no, official, date = f"T{row}", f"R{row}", f"S{row}"
         ws.cell(row=row, column=21, value=(
@@ -549,7 +584,7 @@ def build_paste(wb, paste_lines: list[str] | None = None) -> None:
         ws.cell(row=row, column=26, value=f'=IF(Y{row}="","",{no}&"_"&Y{row})')
         ws.cell(row=row, column=19).number_format = "yyyy/mm/dd"
 
-    for col in (2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 23, 24, 25, 26, 27):
+    for col in (2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 23, 24, 25, 26, 27, 28, 29, 30):
         ws.column_dimensions[get_column_letter(col)].hidden = True
     for col, width in ((1, 52), (14, 6), (15, 9), (16, 14), (17, 28), (18, 28), (19, 12),
                        (20, 8), (21, 14), (22, 26)):
@@ -647,7 +682,8 @@ def build_guide(wb) -> None:
         "",
         "■ 資格をまとめて取り込む（貼り付けるだけ）",
         "「資格取込」シートのA6以降に、資格取得の一覧を1行1件で貼り付けてください。",
-        "   例) 3-2-15〔タブ〕山田太郎 基礎製図検定 令和6年7月10日",
+        "   例) 3-2-15〔タブ〕山田 太郎 基礎製図検定 令和6年7月10日",
+        "   ・氏名は「山田 太郎」のように姓と名が離れていてもかまいません。",
         "   ・学年-組-出席番号 → 氏名 → 資格名 → 取得日 の順（区切りは空白でもタブでも可）",
         "   ・先頭の番号がないときは氏名で照合します。",
         "   ・「状態」の列に 反映／重複／要確認 が出るので、要確認の行だけ直してください。",
@@ -1098,10 +1134,10 @@ def main(argv: list[str] | None = None) -> int:
     paste = None
     if args.with_sample:
         paste = [
-            "3-2-1\t佐野太郎\t計算技術検定3級\t令和6年11月15日",
-            "3-2-2 近畿花子 実用英語検定2級 2025/6/8",
-            "3-2-3 泉州一郎 危険物取扱者乙4 令和7年3月14日",
-            "3-2-2 近畿花子 色彩検定３級 令和7年7月13日",
+            "3-2-1\t佐野 太郎\t計算技術検定3級\t令和6年11月15日",
+            "3-2-2 近畿 花子 実用英語検定2級 2025/6/8",
+            "3-2-3　泉州 一郎\t危険物取扱者乙4\t令和7年3月14日",
+            "3-2-2 近畿 花子 技能検定　機械加工（普通旋盤作業）3級 令和7年7月13日",
         ]
     out = build(Path(args.official), Path(args.output), students, args.sheets, paste)
     print(f"作成しました: {out}")
