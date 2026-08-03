@@ -216,8 +216,17 @@ class Resume:
         return SAME_AS_ABOVE if self.contact_is_same else self.contact_address
 
 
-def build_resume(values: dict[str, object], *, as_of: dt.date | None = None) -> Resume:
-    """入力シートから読んだ生の値（キー→値）を Resume に組み立てる。"""
+def build_resume(
+    values: dict[str, object],
+    *,
+    as_of: dt.date | None = None,
+    master: dict[str, str] | None = None,
+    license_order: str = "取得年月順",
+) -> Resume:
+    """入力シートから読んだ生の値（キー→値）を Resume に組み立てる。
+
+    master を渡すと、資格名を正式名称に置き換える。
+    """
     warnings: list[str] = []
 
     def text(key: str) -> str:
@@ -258,7 +267,9 @@ def build_resume(values: dict[str, object], *, as_of: dt.date | None = None) -> 
     if resume.contact_is_same and resume.contact_kana:
         warnings.append("連絡先が未入力のため「同上」にします（ふりがなは印字しません）。")
 
-    for i in range(1, 21):
+    from .licenses import official_name  # 循環参照を避けるためここで読み込む
+
+    for i in range(1, 41):
         ym_raw = values.get(f"license.{i}.ym")
         name_raw = normalize(values.get(f"license.{i}.name"))
         if not normalize(ym_raw) and not name_raw:
@@ -270,7 +281,11 @@ def build_resume(values: dict[str, object], *, as_of: dt.date | None = None) -> 
         else:
             year, month = 0, 0
             warnings.append(f"資格{i}: 取得年月が空です。")
-        resume.licenses.append(License(year, month, name_raw))
+        resume.licenses.append(License(year, month, official_name(name_raw, master)))
+
+    if license_order != "入力順":
+        # 取得年月の古い順。年月が空のものは最後に回す。
+        resume.licenses.sort(key=lambda lic: (lic.year == 0, lic.year, lic.month))
 
     for i in range(1, 5):
         ym_raw = values.get(f"job.{i}.ym")

@@ -3,14 +3,15 @@
 Excel / Googleスプレッドシートに入力した内容を、そのままPDFの用紙に反映する。
 """
 
-from .inputs import read_values, write_template
+from .inputs import Student, read_students, write_template
 from .model import Resume, build_resume
 from .render import render_preview_png, render_resume
 
 __all__ = [
     "Resume",
+    "Student",
     "build_resume",
-    "read_values",
+    "read_students",
     "write_template",
     "render_resume",
     "render_preview_png",

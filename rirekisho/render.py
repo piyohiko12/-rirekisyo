@@ -152,8 +152,8 @@ class Renderer:
 # ------------------------------------------------------------------ 各欄の描画
 def _draw_personal(r: Renderer, resume: Resume) -> None:
     fs = L.FONT_SIZES
-    r.draw_line(resume.name_kana, L.NAME_KANA, fs["kana"], pad=8)
-    r.draw_line(resume.name, L.NAME, fs["name"], pad=10)
+    r.draw_line(resume.name_kana, L.NAME_KANA, fs["kana"], align="center", pad=8)
+    r.draw_line(resume.name, L.NAME, fs["name"], align="center", pad=10)
 
     if resume.birth:
         y0, y1 = L.BIRTH_ROW
