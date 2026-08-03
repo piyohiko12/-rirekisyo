@@ -32,6 +32,9 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
+from openpyxl.worksheet.hyperlink import Hyperlink
+from openpyxl.worksheet.pagebreak import Break
+from openpyxl.workbook.defined_name import DefinedName
 
 from rirekisho.inputs import DEFAULT_MASTER, OUTPUT_FIELDS, columns
 
@@ -49,6 +52,10 @@ PASTE_FIRST_ROW = 6      # 貼り付けを始める行
 PASTE_ROWS = 200         # 貼り付けられる件数
 IMPORT_SLOTS = 6         # 1人が取り込める件数
 GUIDE = "使い方"
+ZIPCODES = "郵便番号"
+FORM_SHEET = "履歴書"
+BLOCK_ROWS = 91          # 履歴書1人分の行数（1ページ）
+ZIP_PREFECTURES = ("大阪府", "和歌山県", "奈良県")
 
 ROSTER_FIRST_ROW = 5      # 生徒1人目の行
 STUDENTS = 40             # 履歴書シートの枚数
@@ -157,8 +164,8 @@ def build_roster(wb, students: list[dict] | None) -> None:
     ws.cell(row=1, column=1, value="入力（1行＝1生徒・名列順）").font = Font(size=13, bold=True)
     ws.cell(
         row=1, column=4,
-        value="黄色いセルに入力すると、履歴書シート（01〜40）に自動で反映されます。"
-              "Noの数字が、そのままシート名になります。",
+        value="黄色いセルに入力すると、「履歴書」シートに自動で反映されます（1人＝1ページ・Noの順）。"
+              "印刷は「設定」シートで No.○ 〜 No.○ を指定してください。",
     ).font = small
 
     start = 1
@@ -241,6 +248,52 @@ def build_settings(wb) -> None:
     dv = DataValidation(type="list", formula1=f"={COURSES}!$A$3:$A$8", allow_blank=True)
     ws.add_data_validation(dv)
     dv.add(ws["B5"])
+
+    # ---- 印刷する範囲（No.○ から No.○ まで）
+    ws["A8"] = "印刷する範囲"
+    ws["A8"].font = Font(size=12, bold=True)
+    ws["A9"], ws["A10"] = "開始No（この生徒から）", "終了No（この生徒まで）"
+    for ref_, value in (("B9", 1), ("B10", STUDENTS)):
+        cell = ws[ref_]
+        cell.value = value
+        cell.fill = input_fill
+        cell.font = Font(size=12, bold=True)
+        cell.alignment = Alignment(horizontal="center")
+        cell.border = Border(*(Side(style="thin"),) * 4)
+    ws["C9"] = "「入力」シートのNo（1〜40）"
+    ws["C10"] = "1人だけのときは、開始と終了に同じ番号を入れます"
+    for ref_ in ("C9", "C10"):
+        ws[ref_].font = small
+    no_dv = DataValidation(type="whole", operator="between", formula1=1, formula2=STUDENTS,
+                           allow_blank=False, showErrorMessage=True,
+                           errorTitle="No", error=f"1〜{STUDENTS} の数字を入れてください")
+    ws.add_data_validation(no_dv)
+    no_dv.add(ws["B9"])
+    no_dv.add(ws["B10"])
+
+    ws.merge_cells("A12:C13")
+    button = ws["A12"]
+    button.value = "▶ 印刷する（クリック → 履歴書シートへ移動 → Ctrl+P）"
+    button.font = Font(size=14, bold=True, color="FFFFFF")
+    button.fill = PatternFill("solid", fgColor="2C6FBB")
+    button.alignment = Alignment(horizontal="center", vertical="center")
+    button.hyperlink = Hyperlink(ref="A12", location=f"{FORM_SHEET}!A1", display="印刷する")
+    for row in ws["A12:C13"]:
+        for cell in row:
+            cell.border = Border(*(Side(style="medium", color="1F4E79"),) * 4)
+    ws["A14"] = (
+        "上の番号を入れてからボタンを押すと履歴書シートへ移動します。"
+        "そのまま Ctrl+P（ファイル → 印刷／PDFで保存）を押すと、指定した範囲だけが出ます。"
+    )
+    ws["A14"].font = small
+    ws["A15"] = (
+        "※ 範囲がうまく反映されないときは、印刷画面の「ページ指定」に同じ番号を入れてください"
+        "（1ページ＝生徒1人・ページ番号＝No）。"
+    )
+    ws["A15"].font = small
+    ws.row_dimensions[12].height = 22
+    ws.row_dimensions[13].height = 22
+
     ws.column_dimensions["A"].width = 42
     ws.column_dimensions["B"].width = 30
     ws.column_dimensions["C"].width = 46
@@ -509,29 +562,88 @@ def roster_col_match() -> str:
     return get_column_letter(len(columns()) + 2)
 
 
+KATAKANA_TO_HIRAGANA = {chr(c): chr(c - 0x60) for c in range(0x30A1, 0x30F7)}
+
+
+def to_hiragana(text: str) -> str:
+    """カタカナの読みをひらがなにする（履歴書のふりがなはひらがなのため）。"""
+    return "".join(KATAKANA_TO_HIRAGANA.get(ch, ch) for ch in text)
+
+
+def zipcode_rows() -> list[tuple[str, str, str]]:
+    """(郵便番号, 住所, ふりがな) の一覧。posuto の郵便番号データから作る。"""
+    import json
+    import sqlite3
+
+    import posuto
+
+    db_path = Path(posuto.__file__).with_name("postaldata.db")
+    rows = []
+    with sqlite3.connect(db_path) as db:
+        marks = ",".join("?" * len(ZIP_PREFECTURES))
+        for code, data in db.execute(
+            f"select code, data from postal_data where prefecture in ({marks}) order by code",
+            ZIP_PREFECTURES,
+        ):
+            d = json.loads(data)
+            town = d["neighborhood"]
+            town_kana = d["neighborhood_kana"]
+            if town in ("以下に掲載がない場合",):
+                town, town_kana = "", ""
+            address = f'{d["prefecture"]}{d["city"]}{town}'
+            kana = to_hiragana(f'{d["prefecture_kana"]}{d["city_kana"]}{town_kana}')
+            rows.append((code, address, kana))
+    return rows
+
+
+def build_zipcodes(wb) -> None:
+    """「郵便番号」シート（非表示）: 郵便番号 → 住所・ふりがな の対応表。"""
+    ws = wb.create_sheet(ZIPCODES)
+    ws["A1"] = "郵便番号データ（自動・さわらないでください）"
+    ws["A1"].font = Font(size=12, bold=True)
+    ws["A2"] = f"収録: {'・'.join(ZIP_PREFECTURES)}（日本郵便の郵便番号データより）"
+    ws["A2"].font = Font(size=9, color="666666")
+    for i, label in enumerate(("郵便番号", "住所", "ふりがな"), start=1):
+        ws.cell(row=3, column=i, value=label).font = Font(size=9, bold=True)
+    try:
+        rows = zipcode_rows()
+    except Exception as exc:   # データが無くてもブックは作れる
+        print(f"郵便番号データを入れられませんでした: {exc}", file=sys.stderr)
+        rows = []
+    for i, (code, address, kana) in enumerate(rows, start=4):
+        ws.cell(row=i, column=1, value=code)
+        ws.cell(row=i, column=2, value=address)
+        ws.cell(row=i, column=3, value=kana)
+    ws.column_dimensions["A"].width = 12
+    ws.column_dimensions["B"].width = 34
+    ws.column_dimensions["C"].width = 34
+    ws.sheet_state = "hidden"
+    print(f"郵便番号: {len(rows)}件")
+
+
 def build_guide(wb) -> None:
     ws = wb.create_sheet(GUIDE, 0)
     lines = [
-        "■ このファイルの使い方（Excelだけで完結します）",
+        "■ このファイルの使い方（Excelだけで完結します。マクロもPythonも使いません）",
         "",
         "1.「入力」シートに、名列順で生徒の情報を入力します（黄色いセル）。",
         "   ・学科は6種類からドロップダウンで選べます（空欄なら「設定」の既定の学科）。",
+        "   ・ふりがな（住所）は空欄でもOK。郵便番号から自動で入ります（大阪府・和歌山県・奈良県）。",
+        "     郵便番号だけでは町名までしか分からないので、番地の読みが要るときは手で書き足してください。",
         "   ・連絡先を空欄にすると、履歴書には自動で「同上」と入ります。",
         "   ・生年月日は「2008/5/12」のように日付で入力してください（元号と満○歳は自動）。",
         "",
-        "2.「01」〜「40」のシートが、そのまま履歴書になります（数字は入力シートのNo）。",
-        "   入力すると自動で反映されるので、印刷前に見て確認してください。",
+        "2.「履歴書」シートが、そのまま印刷する用紙です（1人＝1ページ・上から入力シートのNo順）。",
+        "   画面をスクロールすれば、印刷前に全員分を確認できます。",
         "",
-        "3. PDFにする（1人分）",
-        "   その生徒のシートを開く → ファイル → 名前を付けて保存 → ファイルの種類で「PDF」を選ぶ",
-        "   （または ファイル → エクスポート → PDF/XPS ドキュメントの作成）",
-        "",
-        "4. PDFにする（全員分・1つのファイル）",
-        "   ファイル → エクスポート → PDF/XPS → 「オプション」→「ブック全体」→ 発行",
-        "   ※ 必要な生徒のシートだけ出したいときは、シート見出しを Ctrl キーを押しながら選び、",
-        "     オプションで「選択したシート」を選びます。",
-        "",
-        "5. 印刷するときは、そのままシートを印刷してください（A4横・1ページに収まります）。",
+        "3. 印刷・PDFにする（No.○ から No.○ まで）",
+        "   ①「設定」シートの【開始No】【終了No】に番号を入れます（1人だけなら同じ番号）。",
+        "   ②【▶ 印刷する】ボタンを押すと「履歴書」シートに移動します。",
+        "   ③ そのまま Ctrl+P（ファイル → 印刷）→ 指定した範囲だけが印刷されます。",
+        "      PDFにするときは、印刷画面のプリンターで「Microsoft Print to PDF」を選ぶか、",
+        "      ファイル → 名前を付けて保存 → ファイルの種類で「PDF」を選びます。",
+        "   ※ 範囲がうまく効かないときは、印刷画面の「ページ指定」に同じ番号を入れてください。",
+        "     1ページ＝生徒1人なので、ページ番号＝入力シートのNo です。",
         "",
         "■ 資格をまとめて取り込む（貼り付けるだけ）",
         "「資格取込」シートのA6以降に、資格取得の一覧を1行1件で貼り付けてください。",
@@ -543,17 +655,19 @@ def build_guide(wb) -> None:
         "",
         "■ 各シートの役割",
         "・入力　　　… 生徒の情報（1行＝1生徒）",
-        "・設定　　　… 基準日（満○歳の計算日）、学校名、既定の学科、卒業（見込）年月",
+        "・履歴書　　… 印刷する用紙（1人＝1ページ）",
+        "・設定　　　… 印刷する範囲、基準日、学校名、既定の学科、卒業（見込）年月",
         "・反映項目　… 履歴書に出す項目を○×で選ぶ",
         "・学科マスタ… 在籍校欄に出る学科（6種類）",
         "・資格取込　… 資格一覧を貼り付けると、名簿と照合して自動で振り分けます",
         "・資格マスタ… 入力した資格名を正式名称に直す変換表",
-        "・資格集約　… 資格を取得年月順に並べる計算用（非表示・さわらないでください）",
+        "・資格集約／計算／郵便番号 … 自動計算用（非表示・さわらないでください）",
         "",
         "■ 自動で入るもの",
         "・満○歳　　… 生年月日と「設定」の基準日から計算します。",
         "・元号の年　… 生年月日から自動で計算します（昭和・平成の丸は手で付けてください）。",
         "・郵便番号　… 7桁の数字だけでも 123-4567 の形にします。",
+        "・住所のふりがな … 郵便番号から自動で入ります（手で入れた場合はそちらが優先）。",
         "・連絡先　　… 空欄なら「同上」。",
         "・資格　　　… 取得年月の古い順に並べ、資格マスタの正式名称で印字します（上から5件）。",
         "・在籍校　　… 「設定」の学校名と、生徒ごとの学科を組み合わせます。",
@@ -561,7 +675,7 @@ def build_guide(wb) -> None:
         "■ 注意",
         "・写真は印刷した用紙に貼ってください。",
         "・職歴の「平成／令和」の丸は、印刷後に手で付けてください。",
-        "・シート名（01〜40）や、非表示のシートは変えないでください。",
+        "・非表示のシートは変えないでください。",
     ]
     for i, line in enumerate(lines, start=1):
         cell = ws.cell(row=i, column=1, value=line)
@@ -572,59 +686,113 @@ def build_guide(wb) -> None:
 
 
 # ------------------------------------------------------------------ 履歴書シート
-def fill_form(ws, i: int) -> None:
+def shift(ref: str, offset: int) -> str:
+    """セル範囲の行番号をずらす（例: L11:AT14 → L102:AT105）。"""
+    return re.sub(r"([A-Z]+)(\d+)", lambda m: f"{m.group(1)}{int(m.group(2)) + offset}", ref)
+
+
+def fill_form(ws, i: int, offset: int = 0) -> None:
     """履歴書シートの記入欄に、「計算」シートを参照する数式を入れる。"""
     row = CALC_FIRST_ROW + i - 1
 
     def calc(col: str) -> str:
         return f"={CALC}!${col}${row}"
 
-    set_cell(ws, NAME_KANA_CELL, calc("C"), size=10, align="center", shrink=True)
-    set_cell(ws, NAME_CELL, calc("B"), size=16, align="center", shrink=True)
-    set_cell(ws, BIRTH_YEAR_CELL, calc("D"), align="center")
-    set_cell(ws, BIRTH_MONTH_CELL, calc("E"), align="center")
-    set_cell(ws, BIRTH_DAY_CELL, calc("F"), align="center")
-    set_cell(ws, BIRTH_AGE_CELL, calc("G"), align="center")
+    set_cell(ws, shift(NAME_KANA_CELL, offset), calc("C"), size=10, align="center", shrink=True)
+    set_cell(ws, shift(NAME_CELL, offset), calc("B"), size=16, align="center", shrink=True)
+    set_cell(ws, shift(BIRTH_YEAR_CELL, offset), calc("D"), align="center")
+    set_cell(ws, shift(BIRTH_MONTH_CELL, offset), calc("E"), align="center")
+    set_cell(ws, shift(BIRTH_DAY_CELL, offset), calc("F"), align="center")
+    set_cell(ws, shift(BIRTH_AGE_CELL, offset), calc("G"), align="center")
 
-    set_cell(ws, ADDR_ZIP_CELL, calc("H"), size=10)
-    set_cell(ws, ADDR_CELL, calc("I"), size=10, wrap=True, indent=1)
-    set_cell(ws, ADDR_KANA_CELL, calc("J"), size=9, indent=1)
+    set_cell(ws, shift(ADDR_ZIP_CELL, offset), calc("H"), size=10)
+    set_cell(ws, shift(ADDR_CELL, offset), calc("I"), size=10, wrap=True, indent=1)
+    set_cell(ws, shift(ADDR_KANA_CELL, offset), calc("J"), size=9, indent=1)
 
-    set_cell(ws, CONTACT_ZIP_CELL, calc("K"), size=10)
-    set_cell(ws, CONTACT_CELL, calc("L"), size=10, align="center", wrap=True)
-    set_cell(ws, CONTACT_KANA_CELL, calc("M"), size=9, indent=1)
+    set_cell(ws, shift(CONTACT_ZIP_CELL, offset), calc("K"), size=10)
+    set_cell(ws, shift(CONTACT_CELL, offset), calc("L"), size=10, align="center", wrap=True)
+    set_cell(ws, shift(CONTACT_KANA_CELL, offset), calc("M"), size=9, indent=1)
 
-    set_cell(ws, SCHOOL_CELL, calc("N"), size=10, wrap=True)
-    set_cell(ws, GRAD_YEAR_CELL, f"={SETTINGS}!$B$6", align="center")
-    set_cell(ws, GRAD_MONTH_CELL, f"={SETTINGS}!$B$7", align="center")
+    set_cell(ws, shift(SCHOOL_CELL, offset), calc("N"), size=10, wrap=True)
+    set_cell(ws, shift(GRAD_YEAR_CELL, offset), f"={SETTINGS}!$B$6", align="center")
+    set_cell(ws, shift(GRAD_MONTH_CELL, offset), f"={SETTINGS}!$B$7", align="center")
 
     base = f"{SETTINGS}!$B$3"
-    set_cell(ws, TODAY_YEAR_CELL, f'=IF(N({base})=0,"",YEAR({base})-2018)', align="center")
-    set_cell(ws, TODAY_MONTH_CELL, f'=IF(N({base})=0,"",MONTH({base}))', align="center")
-    set_cell(ws, TODAY_DAY_CELL, f'=IF(N({base})=0,"",DAY({base}))', align="center")
+    set_cell(ws, shift(TODAY_YEAR_CELL, offset), f'=IF(N({base})=0,"",YEAR({base})-2018)', align="center")
+    set_cell(ws, shift(TODAY_MONTH_CELL, offset), f'=IF(N({base})=0,"",MONTH({base}))', align="center")
+    set_cell(ws, shift(TODAY_DAY_CELL, offset), f'=IF(N({base})=0,"",DAY({base}))', align="center")
 
     for k, (row_top, row_bottom) in enumerate(LICENSE_ROW_BANDS, start=1):
         ym_col = get_column_letter(15 + (k - 1) * 2)      # O,Q,S,U,W
         name_col = get_column_letter(16 + (k - 1) * 2)    # P,R,T,V,X
-        set_cell(ws, f"{LICENSE_YM_COLS[0]}{row_top}:{LICENSE_YM_COLS[1]}{row_bottom}",
+        set_cell(ws, shift(f"{LICENSE_YM_COLS[0]}{row_top}:{LICENSE_YM_COLS[1]}{row_bottom}", offset),
                  calc(ym_col), size=10, align="center")
-        set_cell(ws, f"{LICENSE_NAME_COLS[0]}{row_top}:{LICENSE_NAME_COLS[1]}{row_bottom}",
+        set_cell(ws, shift(f"{LICENSE_NAME_COLS[0]}{row_top}:{LICENSE_NAME_COLS[1]}{row_bottom}", offset),
                  calc(name_col), size=10, indent=1, shrink=True)
 
-    set_cell(ws, ACTIVITIES_CELL, calc("Y"), size=10, valign="top", wrap=True, indent=1)
-    set_cell(ws, MOTIVATION_CELL, calc("Z"), size=10, valign="top", wrap=True, indent=1)
-    set_cell(ws, REMARKS_CELL, calc("AA"), size=10, valign="top", wrap=True, indent=1)
+    set_cell(ws, shift(ACTIVITIES_CELL, offset), calc("Y"), size=10, valign="top", wrap=True, indent=1)
+    set_cell(ws, shift(MOTIVATION_CELL, offset), calc("Z"), size=10, valign="top", wrap=True, indent=1)
+    set_cell(ws, shift(REMARKS_CELL, offset), calc("AA"), size=10, valign="top", wrap=True, indent=1)
 
     for k, (row_top, row_bottom) in enumerate(JOB_ROW_BANDS[:2], start=1):
         year_col = get_column_letter(28 + (k - 1) * 3)    # AB, AE
         month_col = get_column_letter(29 + (k - 1) * 3)   # AC, AF
         text_col = get_column_letter(30 + (k - 1) * 3)    # AD, AG
-        set_cell(ws, f"{JOB_YEAR_COLS[0]}{row_top+2}:{JOB_YEAR_COLS[1]}{row_top+3}",
+        set_cell(ws, shift(f"{JOB_YEAR_COLS[0]}{row_top+2}:{JOB_YEAR_COLS[1]}{row_top+3}", offset),
                  calc(year_col), align="center")
-        set_cell(ws, f"{JOB_MONTH_COLS[0]}{row_top+2}:{JOB_MONTH_COLS[1]}{row_top+3}",
+        set_cell(ws, shift(f"{JOB_MONTH_COLS[0]}{row_top+2}:{JOB_MONTH_COLS[1]}{row_top+3}", offset),
                  calc(month_col), align="center")
-        set_cell(ws, f"{JOB_TEXT_COLS[0]}{row_top}:{JOB_TEXT_COLS[1]}{row_bottom}",
+        set_cell(ws, shift(f"{JOB_TEXT_COLS[0]}{row_top}:{JOB_TEXT_COLS[1]}{row_bottom}", offset),
                  calc(text_col), size=10, indent=1, wrap=True)
+
+
+def build_form_sheet(wb, src) -> None:
+    """1枚の「履歴書」シートに、生徒40人分を縦に並べる（1人＝1ページ）。"""
+    from copy import copy
+
+    ws = wb.create_sheet(FORM_SHEET, 1)
+    ws.sheet_format = copy(src.sheet_format)
+    ws.sheet_view.showGridLines = False
+    ws.page_setup = copy(src.page_setup)
+    ws.page_margins = copy(src.page_margins)
+    ws.print_options = copy(src.print_options)
+    for key, dim in src.column_dimensions.items():
+        new = copy(dim)
+        new.worksheet = ws
+        ws.column_dimensions[key] = new
+
+    src_rows = list(src.iter_rows(min_row=1, max_row=BLOCK_ROWS))
+    merges = [str(r) for r in src.merged_cells.ranges]
+    default_height = src.sheet_format.defaultRowHeight
+
+    for i in range(1, STUDENTS + 1):
+        offset = (i - 1) * BLOCK_ROWS
+        for row in src_rows:
+            for cell in row:
+                if cell.value is None and not cell.has_style:
+                    continue
+                new = ws.cell(row=cell.row + offset, column=cell.column, value=cell.value)
+                if cell.has_style:
+                    new._style = copy(cell._style)
+        for r in range(1, BLOCK_ROWS + 1):
+            dim = src.row_dimensions.get(r)
+            ws.row_dimensions[r + offset].height = (
+                dim.height if dim is not None and dim.height else default_height
+            )
+        for rng in merges:
+            ws.merge_cells(shift(rng, offset))
+        fill_form(ws, i, offset)
+        if i > 1:
+            ws.row_breaks.append(Break(id=offset))
+
+    # 「設定」の開始No〜終了No だけを印刷する（数式の印刷範囲）
+    start = f"MAX(1,MIN({STUDENTS},N({SETTINGS}!$B$9)))"
+    end = f"MAX({start},MIN({STUDENTS},N({SETTINGS}!$B$10)))"
+    area = (
+        f"OFFSET({FORM_SHEET}!$A$1,({start}-1)*{BLOCK_ROWS},0,"
+        f"({end}-{start}+1)*{BLOCK_ROWS},{src.max_column})"
+    )
+    ws.defined_names.add(DefinedName("_xlnm.Print_Area", attr_text=area))
 
 
 def build_calc(wb) -> None:
@@ -679,7 +847,11 @@ def build_calc(wb) -> None:
                      f'OR(N({birth})=0,N({SETTINGS}!$B$3)=0)'))
         put(8, guard("zip", zip_fmt(ref("zip")), f'{ref("zip")}=""'))
         put(9, guard("address", ref("address")))
-        put(10, guard("address_kana", ref("address_kana")))
+        zip_key = f'TEXT(VALUE(SUBSTITUTE({ref("zip")},"-","")),"0000000")'
+        lookup = f'IFERROR(VLOOKUP({zip_key},{ZIPCODES}!$A:$C,3,FALSE),"")'
+        put(10, f'=IF({field_cell("address_kana")}="×","",'
+                f'IF({ref("address_kana")}<>"",{ref("address_kana")},'
+                f'IF({ref("zip")}="","",{lookup})))')
         put(11, guard("contact", zip_fmt(ref("contact_zip")), f'{ref("contact_zip")}=""'))
         put(12, f'=IF({field_cell("contact")}="×","",'
                 f'IF(AND({ref("contact_zip")}="",{ref("contact_address")}=""),"同上",'
@@ -730,20 +902,14 @@ def build(official: Path, out: Path, students: list[dict] | None = None,
           sheets: int = STUDENTS, paste_lines: list[str] | None = None) -> Path:
     wb = load_workbook(official)
     form = wb[FORM_SHEET_SRC]
-    for name in list(wb.sheetnames):
-        if name != FORM_SHEET_SRC:
-            del wb[name]
+    form._images = []
+    form._charts = []
 
-    forms = [form]
-    for _ in range(sheets - 1):
-        forms.append(wb.copy_worksheet(form))
-    for i, ws in enumerate(forms, start=1):
-        ws.title = f"{i:02d}"
-        ws._images = []   # 図はあとで元ファイルからそのまま入れ直す
-        ws._charts = []
-        ws.sheet_view.showGridLines = False
-        ws.print_area = form.print_area
-        fill_form(ws, i)
+    build_form_sheet(wb, form)
+    del wb[FORM_SHEET_SRC]
+    for name in list(wb.sheetnames):
+        if name != FORM_SHEET:
+            del wb[name]
 
     build_roster(wb, students)
     build_settings(wb)
@@ -753,14 +919,16 @@ def build(official: Path, out: Path, students: list[dict] | None = None,
     build_paste(wb, paste_lines)
     build_gather(wb)
     build_calc(wb)
+    build_zipcodes(wb)
     build_guide(wb)
 
-    order = [GUIDE, ROSTER, PASTE, SETTINGS, FIELDS, COURSES, MASTER, GATHER, CALC]
-    wb._sheets.sort(key=lambda ws: order.index(ws.title) if ws.title in order else 100 + int(ws.title))
+    order = [GUIDE, ROSTER, PASTE, SETTINGS, FIELDS, COURSES, MASTER,
+             FORM_SHEET, GATHER, CALC, ZIPCODES]
+    wb._sheets.sort(key=lambda ws: order.index(ws.title) if ws.title in order else 99)
     wb.active = 0
     out.parent.mkdir(parents=True, exist_ok=True)
     wb.save(out)
-    _attach_drawings(official, out, [f"{i:02d}" for i in range(1, sheets + 1)])
+    _attach_drawings(official, out, [FORM_SHEET])
     return out
 
 
@@ -782,6 +950,35 @@ def _sheet_parts(zf: zipfile.ZipFile) -> dict[str, str]:
         target = targets[rid].lstrip("/")
         parts[sheet.get("name")] = target if target.startswith("xl/") else "xl/" + target
     return parts
+
+
+ANCHOR_RE = re.compile(rb"<xdr:(oneCellAnchor|twoCellAnchor)\b.*?</xdr:\1>", re.S)
+
+
+def _repeat_drawing(drawing_xml: bytes, blocks: int, block_rows: int) -> bytes:
+    """罫線の図を、ページの数だけ行をずらして並べ直す。"""
+    anchors = ANCHOR_RE.findall(drawing_xml)
+    matches = list(ANCHOR_RE.finditer(drawing_xml))
+    if not matches:
+        return drawing_xml
+    head = drawing_xml[: matches[0].start()]
+    tail = drawing_xml[matches[-1].end():]
+    body = bytearray()
+    ident = 1000
+    for i in range(blocks):
+        offset = i * block_rows
+        for m in matches:
+            chunk = m.group(0)
+            chunk = re.sub(
+                rb"<xdr:row>(\d+)</xdr:row>",
+                lambda mm: b"<xdr:row>%d</xdr:row>" % (int(mm.group(1)) + offset),
+                chunk,
+            )
+            ident += 1
+            chunk = re.sub(rb'(<xdr:cNvPr[^>]*\bid=")\d+(")',
+                           rb"\g<1>%d\g<2>" % ident, chunk)
+            body += chunk
+    return head + bytes(body) + tail
 
 
 def _attach_drawings(official: Path, out: Path, form_sheets: list[str]) -> None:
@@ -811,7 +1008,7 @@ def _attach_drawings(official: Path, out: Path, form_sheets: list[str]) -> None:
     for index, sheet_name in enumerate(form_sheets, start=1):
         part = parts[sheet_name]
         drawing_name = f"drawing{index}.xml"
-        data[f"xl/drawings/{drawing_name}"] = drawing_xml
+        data[f"xl/drawings/{drawing_name}"] = _repeat_drawing(drawing_xml, STUDENTS, BLOCK_ROWS)
         data[f"xl/drawings/_rels/{drawing_name}.rels"] = drawing_rels
 
         rels_name = f"xl/worksheets/_rels/{Path(part).name}.rels"
