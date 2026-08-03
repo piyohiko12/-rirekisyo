@@ -137,8 +137,12 @@ def guard(field_key: str, value_formula: str, empty_check: str | None = None) ->
 
 
 def set_cell(ws, ref: str, value, *, size=10.5, align="left", valign="center",
-             wrap=False, shrink=False, indent=0):
-    """結合セルに値（数式）と書式を設定する。"""
+             wrap=False, shrink=False, indent=0, number_format="General"):
+    """結合セルに値（数式）と書式を設定する。
+
+    表示形式は必ず指定する。Excel は数式に DATE() などが含まれると結果を
+    日付書式にしてしまい、「10」が日付として表示されて ### になるため。
+    """
     first = ref.split(":")[0]
     if ":" in ref and ref not in {str(r) for r in ws.merged_cells.ranges}:
         try:
@@ -147,6 +151,7 @@ def set_cell(ws, ref: str, value, *, size=10.5, align="left", valign="center",
             pass
     cell = ws[first]
     cell.value = value
+    cell.number_format = number_format
     cell.font = Font(name=FORM_FONT, size=size)
     cell.alignment = Alignment(
         horizontal=align, vertical=valign, wrap_text=wrap, shrink_to_fit=shrink, indent=indent
@@ -429,9 +434,8 @@ def build_gather(wb) -> None:
                     f'=IFERROR(INDEX({PASTE}!$R${paste_first}:$R${paste_last},{pos}),"")'))
                 _gather_common(ws, row, top, bottom)
                 continue
-            ws.cell(row=row, column=3, value=(
-                f'=IFERROR(IF(ISNUMBER({ROSTER}!{ym_cols[k-1]}{r}),{ROSTER}!{ym_cols[k-1]}{r},'
-                f'DATEVALUE({ROSTER}!{ym_cols[k-1]}{r})),"")'))
+            ws.cell(row=row, column=3,
+                    value=f"={to_date(f'{ROSTER}!{ym_cols[k-1]}{r}')}")
             ws.cell(row=row, column=4, value=f'=IF({ROSTER}!{name_cols[k-1]}{r}="","",{ROSTER}!{name_cols[k-1]}{r})')
             _gather_common(ws, row, top, bottom)
         ws.cell(row=top, column=3).number_format = "yyyy/mm/dd"
@@ -849,6 +853,27 @@ def build_form_sheet(wb, src) -> None:
     ws.defined_names.add(DefinedName("_xlnm.Print_Area", attr_text=area))
 
 
+def to_date(ref: str) -> str:
+    """セルを日付にする式。日付・西暦文字・和暦文字（平成10年12月20日）に対応。"""
+    era = f"LEFT({ref},2)"
+    wareki = (
+        f'DATE(VALUE(MID({ref},3,FIND("年",{ref})-3))'
+        f'+IF({era}="令和",2018,IF({era}="平成",1988,IF({era}="昭和",1925,IF({era}="大正",1911,0)))),'
+        f'VALUE(MID({ref},FIND("年",{ref})+1,FIND("月",{ref})-FIND("年",{ref})-1)),'
+        f'VALUE(SUBSTITUTE(MID({ref},FIND("月",{ref})+1,10),"日","")))'
+    )
+    # 2008/5/12 や 2008-5-12、2008年5月12日 のような西暦の文字列
+    norm = (f'SUBSTITUTE(SUBSTITUTE(SUBSTITUTE(SUBSTITUTE(SUBSTITUTE({ref},'
+            f'"年","/"),"月","/"),"日",""),"-","/"),".","/")')
+    tok = [f'TRIM(MID(SUBSTITUTE({norm},"/",REPT(" ",50)),{k * 50 + 1},50))' for k in range(3)]
+    seireki = f'DATE(VALUE({tok[0]}),VALUE({tok[1]}),VALUE({tok[2]}))'
+    return (
+        f'IF({ref}="","",IF(ISNUMBER({ref}),{ref},'
+        f'IFERROR(IF(OR({era}="令和",{era}="平成",{era}="昭和",{era}="大正"),{wareki},{seireki}),'
+        f'IFERROR(DATEVALUE({ref}),""))))'
+    )
+
+
 def build_calc(wb) -> None:
     """「計算」シート: 履歴書に出す文字を1行＝1生徒で組み立てる（非表示）。"""
     ws = wb.create_sheet(CALC)
@@ -939,12 +964,16 @@ def build_calc(wb) -> None:
             put(base_col + 1, guard("jobs", f"MONTH({job_ym})", f'N({job_ym})=0'))
             put(base_col + 2, guard("jobs", ref(f"job.{k}.text")))
 
-        # 作業列（日付に変換したもの）
-        put(36, f'=IFERROR(IF(ISNUMBER({ref("birth")}),{ref("birth")},DATEVALUE({ref("birth")})),"")')
-        put(37, f'=IFERROR(IF(ISNUMBER({ref("job.1.ym")}),{ref("job.1.ym")},'
-                f'DATEVALUE({ref("job.1.ym")})),"")')
-        put(38, f'=IFERROR(IF(ISNUMBER({ref("job.2.ym")}),{ref("job.2.ym")},'
-                f'DATEVALUE({ref("job.2.ym")})),"")')
+        # 作業列（日付に変換したもの。和暦の文字で入力されていても読む）
+        put(36, f"={to_date(ref('birth'))}")
+        put(37, f"={to_date(ref('job.1.ym'))}")
+        put(38, f"={to_date(ref('job.2.ym'))}")
+
+    # 和暦年・月・日・満年齢・職歴の年月は数値として表示する（### 対策）
+    for i in range(1, STUDENTS + 1):
+        row = CALC_FIRST_ROW + i - 1
+        for col in (4, 5, 6, 7, 28, 29, 31, 32):
+            ws.cell(row=row, column=col).number_format = "General"
 
     for col in ("AJ", "AK", "AL"):
         ws.column_dimensions[col].hidden = True
