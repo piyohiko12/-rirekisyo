@@ -50,8 +50,8 @@ CALC = "計算"
 CALC_FIRST_ROW = 3
 PASTE = "資格取込"
 PASTE_FIRST_ROW = 6      # 貼り付けを始める行
-PASTE_ROWS = 200         # 貼り付けられる件数
-IMPORT_SLOTS = 8         # 1人が取り込める件数
+PASTE_ROWS = 400         # 貼り付けられる件数
+IMPORT_SLOTS = 20        # 1人が取り込める件数
 GUIDE = "使い方"
 ZIPCODES = "郵便番号"
 FORM_SHEET = "履歴書"
@@ -61,7 +61,7 @@ ZIP_PREFECTURES = ("大阪府", "和歌山県", "奈良県")
 ROSTER_FIRST_ROW = 5      # 生徒1人目の行
 STUDENTS = 40             # 履歴書シートの枚数
 LICENSE_SLOTS = 6         # 「入力」シートの資格の枠数
-GATHER_SLOTS = 14         # 資格集約の1人分の行数（手入力6＋取込8）
+GATHER_SLOTS = LICENSE_SLOTS + IMPORT_SLOTS   # 資格集約の1人分の行数（手入力＋取込）
 LICENSE_ROWS_ON_FORM = GATHER_SLOTS  # 用紙の資格欄に流し込む件数（全件）
 CALC_LICENSE_COL = 15                                          # 計算シートの資格欄の開始列
 CALC_LICENSE_MAX = LICENSE_ROWS_ON_FORM                           # 計算シートが持つ資格の件数
@@ -581,7 +581,11 @@ def build_paste(wb, paste_lines: list[str] | None = None) -> None:
         "先頭の番号がない行は氏名で照合します。取得日は 令和6年7月10日 / 2024/7/10 のどちらでも。"
     )
     ws["A3"].font = small
-    ws["A4"] = "右の「状態」列を見て、赤い行（要確認）だけ直してください。緑＝反映済み、灰＝重複。"
+    ws["A4"] = (
+        "右の「状態」列を見て、赤い行（要確認）だけ直してください。緑＝反映済み、灰＝重複。"
+        f"　1人あたりの取込は{IMPORT_SLOTS}件までです"
+        f"（「入力」シートの手入力{LICENSE_SLOTS}件と合わせて最大{LICENSE_SLOTS + IMPORT_SLOTS}件）。"
+    )
     ws["A4"].font = small
 
     headers = {
@@ -589,7 +593,8 @@ def build_paste(wb, paste_lines: list[str] | None = None) -> None:
         4: "語1", 5: "語2", 6: "語3", 7: "語4", 8: "語5", 9: "語6", 10: "語7", 11: "語8",
         12: "ID", 13: "ID有", 14: "組", 15: "出席番号", 16: "氏名",
         17: "資格名（貼付）", 18: "正式名称", 19: "取得日",
-        20: "名簿No", 21: "名簿の氏名", 22: "状態", 23: "有効", 24: "行", 25: "順位", 26: "キー",
+        20: "名簿No", 21: "名簿の氏名", 22: "判定", 23: "有効", 24: "行", 25: "順位", 26: "キー",
+        31: "状態",
     }
     for col, label in headers.items():
         cell = ws.cell(row=first - 1, column=col, value=label)
@@ -714,21 +719,26 @@ def build_paste(wb, paste_lines: list[str] | None = None) -> None:
             f'$S${first}:$S${last},{date},$X${first}:$X${last},"<"&X{row})+1)'
         ))
         ws.cell(row=row, column=26, value=f'=IF(Y{row}="","",{no}&"_"&Y{row})')
+        # 表示用の「状態」。1人あたりの取込枠を超えた行は、反映されないことを知らせる
+        ws.cell(row=row, column=31, value=(
+            f'=IF(V{row}="","",IF(AND(V{row}="反映",N(Y{row})>{IMPORT_SLOTS}),'
+            f'"要確認（この生徒の取込が{IMPORT_SLOTS}件を超えました）",V{row}))'
+        ))
         ws.cell(row=row, column=19).number_format = "yyyy/mm/dd"
 
     # 途中の計算列は隠して、見るのは「貼付原文・氏名・資格名・取得日・状態」だけにする
-    for col in list(range(2, 16)) + [17, 20] + list(range(23, 31)):
+    for col in list(range(2, 16)) + [17, 20] + list(range(22, 31)):
         ws.column_dimensions[get_column_letter(col)].hidden = True
-    for col, width in ((1, 54), (16, 14), (18, 30), (19, 13), (21, 14), (22, 28)):
+    for col, width in ((1, 54), (16, 14), (18, 30), (19, 13), (21, 14), (31, 34)):
         ws.column_dimensions[get_column_letter(col)].width = width
     ws.freeze_panes = f"A{first}"
 
     # 「状態」の色分け（反映＝緑・重複＝灰・要確認＝赤）
-    state = f"V{first}:V{last}"
+    state = f"AE{first}:AE{last}"
     for formula, fg, bg in (
-        (f'$V{first}="反映"', "1E6B2F", "DFF3E2"),
-        (f'$V{first}="重複"', "666666", "EDEDED"),
-        (f'LEFT($V{first},3)="要確認"', "9C0006", "FFC7CE"),
+        (f'$AE{first}="反映"', "1E6B2F", "DFF3E2"),
+        (f'$AE{first}="重複"', "666666", "EDEDED"),
+        (f'LEFT($AE{first},3)="要確認"', "9C0006", "FFC7CE"),
     ):
         ws.conditional_formatting.add(state, FormulaRule(
             formula=[formula], font=Font(color=fg, bold=True),
