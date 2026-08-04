@@ -31,6 +31,7 @@ from pathlib import Path
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
+from openpyxl.formatting.rule import FormulaRule
 from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.worksheet.hyperlink import Hyperlink
 from openpyxl.worksheet.pagebreak import Break
@@ -121,12 +122,17 @@ WIDE_NUM_SIZE = 9.5      # 3列分の欄（生月・生日・年・月）
 
 
 # ------------------------------------------------------------------ 便利関数
-def roster_col(key: str) -> str:
-    """「入力」シートで、そのキーの列文字を返す。"""
+def roster_index(key: str) -> int:
+    """「入力」シートで、そのキーの列番号を返す。"""
     for i, col in enumerate(columns(), start=1):
         if col.key == key:
-            return get_column_letter(i)
+            return i
     raise KeyError(key)
+
+
+def roster_col(key: str) -> str:
+    """「入力」シートで、そのキーの列文字を返す。"""
+    return get_column_letter(roster_index(key))
 
 
 def master_lookup(name_ref: str) -> str:
@@ -173,24 +179,75 @@ def set_cell(ws, ref: str, value, *, size=10.5, align="left", valign="center",
 
 
 # ------------------------------------------------------------------ 各シート
+# 画面の色（黄=入力する / 水色=自動で入る / 灰=さわらない）
+FILL_INPUT = "FFFDE7"
+FILL_AUTO = "D9EDF7"
+FILL_META = "EFEFEF"
+FILL_HEAD = "E8EEF4"
+FILL_GROUP = "D6E2EF"
+FILL_LINK = "DCE6F1"
+TAB_COLORS = {}
+
+
+def note_font() -> Font:
+    return Font(size=9, color="666666")
+
+
+def link_button(ws, ref: str, text: str, target: str, *, big: bool = False) -> None:
+    """他のシートへ飛ぶボタン（ハイパーリンク）。"""
+    cell = ws[ref]
+    cell.value = text
+    cell.hyperlink = Hyperlink(ref=ref, location=f"{target}!A1", display=text)
+    if big:
+        cell.font = Font(size=14, bold=True, color="FFFFFF")
+        cell.fill = PatternFill("solid", fgColor="2C6FBB")
+        cell.border = Border(*(Side(style="medium", color="1F4E79"),) * 4)
+    else:
+        cell.font = Font(size=11, bold=True, color="1F4E79")
+        cell.fill = PatternFill("solid", fgColor=FILL_LINK)
+        cell.border = Border(*(Side(style="thin", color="9DB7D4"),) * 4)
+    cell.alignment = Alignment(horizontal="center", vertical="center")
+
+
+def back_to_guide(ws, ref: str = "A1", *, shift_col: int = 0) -> None:
+    """右上に「使い方へ」の小さなリンクを置く。"""
+    link_button(ws, ref, "◀ 使い方", GUIDE)
+
+
+def color_tabs(wb) -> None:
+    """シートのタブに色を付けて、役割をひと目で分かるようにする。"""
+    colors = {
+        GUIDE: "4472C4", ROSTER: "FFC000", FORM_SHEET: "70AD47",
+        SETTINGS: "ED7D31", PASTE: "FFD966", FIELDS: "A9D08E",
+        COURSES: "BFBFBF", MASTER: "BFBFBF", MACRO_SHEET: "8FAADC",
+    }
+    for name, color in colors.items():
+        if name in wb.sheetnames:
+            wb[name].sheet_properties.tabColor = color
+
+
 def build_roster(wb, students: list[dict] | None) -> None:
     """「入力」シート（1行＝1生徒の名簿）。"""
     ws = wb.create_sheet(ROSTER, 1)
     cols = columns()
     thin = Side(style="thin", color="BFBFBF")
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
-    input_fill = PatternFill("solid", fgColor="FFFDE7")
-    meta_fill = PatternFill("solid", fgColor="EFEFEF")
-    header_fill = PatternFill("solid", fgColor="E8EEF4")
-    group_fill = PatternFill("solid", fgColor="D6E2EF")
-    small = Font(size=9, color="666666")
+    input_fill = PatternFill("solid", fgColor=FILL_INPUT)
+    auto_fill = PatternFill("solid", fgColor=FILL_AUTO)
+    meta_fill = PatternFill("solid", fgColor=FILL_META)
+    header_fill = PatternFill("solid", fgColor=FILL_HEAD)
+    group_fill = PatternFill("solid", fgColor=FILL_GROUP)
+    small = note_font()
 
-    ws.cell(row=1, column=1, value="入力（1行＝1生徒・名列順）").font = Font(size=13, bold=True)
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=2)
+    back_to_guide(ws)
+    ws.cell(row=1, column=3, value="入力（1行＝1生徒・名列順）").font = Font(size=13, bold=True)
     ws.cell(
-        row=1, column=4,
-        value="黄色いセルに入力すると、「履歴書」シートに自動で反映されます（1人＝1ページ・Noの順）。"
-              "印刷は「設定」シートで No.○ 〜 No.○ を指定してください。",
+        row=1, column=6,
+        value="■ 黄色 ＝ 打ち込むところ　　■ 水色 ＝ 自動で入るところ（上から書けば手入力が優先）"
+              "　　名前が空の行はグレーになります",
     ).font = small
+    ws.row_dimensions[1].height = 20
 
     start = 1
     for i, col in enumerate(cols, start=1):
@@ -230,11 +287,18 @@ def build_roster(wb, students: list[dict] | None) -> None:
             cell = ws.cell(row=row, column=i, value=value)
             cell.border = border
             cell.alignment = Alignment(vertical="top", wrap_text=True)
-            cell.fill = meta_fill if col.key.startswith("meta.") else input_fill
+            if col.key.startswith("meta."):
+                cell.fill = meta_fill
+            elif col.key in ("address_kana", "contact_kana"):
+                cell.fill = auto_fill
+            else:
+                cell.fill = input_fill
+            if col.key in ("zip", "contact_zip"):
+                cell.number_format = "000-0000"
             if col.kind == "date":
                 cell.number_format = "yyyy/mm/dd"
         course_dv.add(ws.cell(row=row, column=cols.index(next(c for c in cols if c.key == "course")) + 1))
-        ws.row_dimensions[row].height = 22
+        ws.row_dimensions[row].height = 28
 
     # 郵便番号から住所のふりがなを自動で入れる（上から書き込めば手入力が優先される）
     auto_kana = [
@@ -260,16 +324,59 @@ def build_roster(wb, students: list[dict] | None) -> None:
     ws.column_dimensions[match_col].hidden = True
     ws.freeze_panes = ws.cell(row=ROSTER_FIRST_ROW, column=5)
 
+    # 資格と職歴はふだん見ないので、まとめて折りたためるようにする（職歴は最初から閉じる）
+    first_license = get_column_letter(roster_index("license.1.name"))
+    last_license = get_column_letter(roster_index(f"license.{LICENSE_SLOTS}.ym"))
+    first_job = get_column_letter(roster_index("job.1.ym"))
+    last_job = get_column_letter(roster_index("job.2.text"))
+    ws.column_dimensions.group(first_license, last_license, outline_level=1, hidden=False)
+    ws.column_dimensions.group(first_job, last_job, outline_level=1, hidden=True)
+    ws.sheet_properties.outlinePr.summaryRight = True
+
+    # 名前が入っていない行は薄いグレーにして、使っていないことを分かるようにする
+    last_row = ROSTER_FIRST_ROW + STUDENTS - 1
+    body_range = f"A{ROSTER_FIRST_ROW}:{get_column_letter(len(cols))}{last_row}"
+    ws.conditional_formatting.add(body_range, FormulaRule(
+        formula=[f'${roster_col("name")}{ROSTER_FIRST_ROW}=""'],
+        fill=PatternFill(bgColor="F5F5F5"), stopIfTrue=True))
+
+    # セルを選んだときに出る入力のヒント
+    hints = {
+        "birth": ("生年月日", "2008/5/12 と入れてください。元号と満○歳は自動です。"),
+        "zip": ("郵便番号", "5980001 のように7桁でOK。住所のふりがなが自動で入ります。"),
+        "contact_address": ("連絡先", "空欄にすると、履歴書には「同上」と入ります。"),
+        "license.1.ym": ("取得年月", "令和6年6月 / 2024/6 / 2024/6/10 のどれでもOKです。"),
+        "activities": ("校内外の諸活動", "改行（Alt+Enter）で箇条書きにできます。"),
+    }
+    for key, (title, message) in hints.items():
+        dv = DataValidation(type=None, allow_blank=True, showInputMessage=True,
+                            promptTitle=title, prompt=message)
+        ws.add_data_validation(dv)
+        letter = get_column_letter(roster_index(key))
+        dv.add(f"{letter}{ROSTER_FIRST_ROW}:{letter}{last_row}")
+
 
 def build_settings(wb) -> None:
     ws = wb.create_sheet(SETTINGS)
     input_fill = PatternFill("solid", fgColor="FFFDE7")
     small = Font(size=9, color="666666")
-    ws["A1"] = "設定（全員に共通）"
-    ws["A1"].font = Font(size=12, bold=True)
+    back_to_guide(ws)
+    ws["B1"] = "設定（全員に共通）"
+    ws["B1"].font = Font(size=13, bold=True)
+    bar_font = Font(size=12, bold=True, color="FFFFFF")
+    bar_fill = PatternFill("solid", fgColor="2C6FBB")
+
+    def bar(row: int, text: str) -> None:
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=3)
+        cell = ws.cell(row=row, column=1, value=text)
+        cell.font, cell.fill = bar_font, bar_fill
+        cell.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+        ws.row_dimensions[row].height = 28
+
+    bar(2, "学校のこと")
     rows = [
-        ("基準日（満○歳の計算日・用紙の「令和　年　月　日現在」）", dt.date(2026, 9, 1),
-         "用紙の日付欄にもこの日付が入ります"),
+        ("基準日（満○歳を計算する日）", dt.date(2026, 9, 1),
+         "用紙の「令和　年　月　日現在」にも入ります"),
         ("学校名", "大阪府立佐野工科高等学校", "履歴書の在籍校欄に出ます"),
         ("既定の学科", COURSE_LIST[2], "「入力」の学科が空欄のとき、この学科になります"),
         ("卒業（見込）年（令和）", 9, "在籍校欄の「令和　年」"),
@@ -279,6 +386,7 @@ def build_settings(wb) -> None:
         ws.cell(row=i, column=1, value=label)
         cell = ws.cell(row=i, column=2, value=value)
         cell.fill = input_fill
+        cell.border = Border(*(Side(style="thin", color="BFBFBF"),) * 4)
         if i == 3:
             cell.number_format = "yyyy/mm/dd"
         ws.cell(row=i, column=3, value=note).font = small
@@ -287,8 +395,7 @@ def build_settings(wb) -> None:
     dv.add(ws["B5"])
 
     # ---- 印刷する範囲（No.○ から No.○ まで）
-    ws["A8"] = "印刷する範囲"
-    ws["A8"].font = Font(size=12, bold=True)
+    bar(8, "印刷する範囲")
     ws["A9"], ws["A10"] = "開始No（この生徒から）", "終了No（この生徒まで）"
     for ref_, value in (("B9", 1), ("B10", STUDENTS)):
         cell = ws[ref_]
@@ -309,39 +416,37 @@ def build_settings(wb) -> None:
     no_dv.add(ws["B10"])
 
     ws.merge_cells("A12:C13")
-    button = ws["A12"]
-    button.value = "▶ 印刷する（クリック → 履歴書シートへ移動 → Ctrl+P）"
-    button.font = Font(size=14, bold=True, color="FFFFFF")
-    button.fill = PatternFill("solid", fgColor="2C6FBB")
-    button.alignment = Alignment(horizontal="center", vertical="center")
-    button.hyperlink = Hyperlink(ref="A12", location=f"{FORM_SHEET}!A1", display="印刷する")
+    link_button(ws, "A12", "▶ この範囲を印刷する（押したあと Ctrl + P）", FORM_SHEET, big=True)
     for row in ws["A12:C13"]:
         for cell in row:
             cell.border = Border(*(Side(style="medium", color="1F4E79"),) * 4)
     ws["A14"] = (
-        "上の番号を入れてからボタンを押すと履歴書シートへ移動します。"
-        "そのまま Ctrl+P（ファイル → 印刷／PDFで保存）を押すと、指定した範囲だけが出ます。"
-    )
-    ws["A14"].font = small
-    ws["A15"] = (
-        "※ 範囲がうまく反映されないときは、印刷画面の「ページ指定」に同じ番号を入れてください"
+        "※ 範囲がうまく効かないときは、印刷画面の「ページ指定」に同じ番号を入れてください"
         "（1ページ＝生徒1人・ページ番号＝No）。"
     )
-    ws["A15"].font = small
-    ws.row_dimensions[12].height = 22
-    ws.row_dimensions[13].height = 22
+    ws["A14"].font = small
+
+    for ref, text, target in (("A16", "① 入力シートへ", ROSTER),
+                              ("B16", "資格をまとめて取込", PASTE),
+                              ("C16", "履歴書に出す項目を選ぶ", FIELDS)):
+        link_button(ws, ref, text, target)
+    ws.row_dimensions[12].height = 24
+    ws.row_dimensions[13].height = 24
+    ws.row_dimensions[16].height = 26
 
     ws.column_dimensions["A"].width = 42
     ws.column_dimensions["B"].width = 30
     ws.column_dimensions["C"].width = 46
+    ws.sheet_view.showGridLines = False
 
 
 def build_fields(wb) -> None:
     ws = wb.create_sheet(FIELDS)
     input_fill = PatternFill("solid", fgColor="FFFDE7")
-    ws["A1"] = "反映項目（履歴書に出す項目を選びます）"
-    ws["A1"].font = Font(size=12, bold=True)
-    ws["A2"] = "B列を「×」にすると、入力してあってもその欄は空欄のまま印刷されます。"
+    back_to_guide(ws)
+    ws["B1"] = "反映項目（履歴書に出す項目を選びます）"
+    ws["B1"].font = Font(size=13, bold=True)
+    ws["A2"] = "「×」にすると、入力してあってもその欄は空欄のまま印刷されます。"
     ws["A2"].font = Font(size=9, color="666666")
     ws["A3"], ws["B3"] = "項目", "反映する（○／×）"
     for cell in (ws["A3"], ws["B3"]):
@@ -464,22 +569,19 @@ def build_paste(wb, paste_lines: list[str] | None = None) -> None:
     input_fill = PatternFill("solid", fgColor="FFFDE7")
     small = Font(size=9, color="666666")
 
-    ws["A1"] = "資格取込（1行＝1件で貼り付けてください）"
-    ws["A1"].font = Font(size=12, bold=True)
+    ws["P1"] = "資格取込（下のA列に、1行＝1件で貼り付けるだけ）"
+    ws["P1"].font = Font(size=13, bold=True)
+    back_to_guide(ws)
     ws["A2"] = (
-        f"A{first} 以降に、資格取得の一覧をそのまま貼り付けます。"
-        "「入力」シートの名簿と照合して、各生徒の資格欄に自動で追加します。"
+        "書式: 3-2-15〔タブか空白〕山田 太郎　基礎製図検定　令和6年7月10日"
+        "　… 学年-組-出席番号 → 氏名 → 資格名 → 取得日"
     )
-    ws["A2"].font = small
+    ws["A2"].font = Font(size=10, name="ＭＳ ゴシック")
     ws["A3"] = (
-        "書式: 3-2-15〔空白またはタブ〕山田 太郎 基礎製図検定 令和6年7月10日"
-        "　…学年-組-出席番号 → 氏名 → 資格名 → 取得日 の順。"
+        "先頭の番号がない行は氏名で照合します。取得日は 令和6年7月10日 / 2024/7/10 のどちらでも。"
     )
     ws["A3"].font = small
-    ws["A4"] = (
-        "先頭の番号がないときは氏名で照合します。取得日は 令和6年7月10日 / 2024/7/10 のどちらでも。"
-        "すでに「入力」シートに手入力してある資格と同じものは「重複」として飛ばします。"
-    )
+    ws["A4"] = "右の「状態」列を見て、赤い行（要確認）だけ直してください。緑＝反映済み、灰＝重複。"
     ws["A4"].font = small
 
     headers = {
@@ -614,12 +716,24 @@ def build_paste(wb, paste_lines: list[str] | None = None) -> None:
         ws.cell(row=row, column=26, value=f'=IF(Y{row}="","",{no}&"_"&Y{row})')
         ws.cell(row=row, column=19).number_format = "yyyy/mm/dd"
 
-    for col in (2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 23, 24, 25, 26, 27, 28, 29, 30):
+    # 途中の計算列は隠して、見るのは「貼付原文・氏名・資格名・取得日・状態」だけにする
+    for col in list(range(2, 16)) + [17, 20] + list(range(23, 31)):
         ws.column_dimensions[get_column_letter(col)].hidden = True
-    for col, width in ((1, 52), (14, 6), (15, 9), (16, 14), (17, 28), (18, 28), (19, 12),
-                       (20, 8), (21, 14), (22, 26)):
+    for col, width in ((1, 54), (16, 14), (18, 30), (19, 13), (21, 14), (22, 28)):
         ws.column_dimensions[get_column_letter(col)].width = width
     ws.freeze_panes = f"A{first}"
+
+    # 「状態」の色分け（反映＝緑・重複＝灰・要確認＝赤）
+    state = f"V{first}:V{last}"
+    for formula, fg, bg in (
+        (f'$V{first}="反映"', "1E6B2F", "DFF3E2"),
+        (f'$V{first}="重複"', "666666", "EDEDED"),
+        (f'LEFT($V{first},3)="要確認"', "9C0006", "FFC7CE"),
+    ):
+        ws.conditional_formatting.add(state, FormulaRule(
+            formula=[formula], font=Font(color=fg, bold=True),
+            fill=PatternFill(bgColor=bg), stopIfTrue=True))
+    ws.sheet_view.showGridLines = False
 
 
 def roster_col_match() -> str:
@@ -991,8 +1105,9 @@ MACRO_STEPS = [
 def build_macro_sheet(wb) -> None:
     """「マクロ」シート: 入れかたの手順と、予備のVBAコード。"""
     ws = wb.create_sheet(MACRO_SHEET)
-    ws["A1"] = "文字の大きさを自動でそろえる（1回だけ設定します）"
-    ws["A1"].font = Font(size=13, bold=True)
+    back_to_guide(ws)
+    ws["B1"] = "文字の大きさを自動でそろえる（1回だけ設定します）"
+    ws["B1"].font = Font(size=13, bold=True)
     heads = ("■", "①", "②", "③", "④", "⑤", "◆", "★")
     for i, line in enumerate(MACRO_STEPS, start=3):
         cell = ws.cell(row=i, column=1, value=line)
@@ -1017,84 +1132,87 @@ def build_macro_sheet(wb) -> None:
 
 
 def build_guide(wb) -> None:
+    """「使い方」シート: 最初に開く案内。要点だけを短く。"""
     ws = wb.create_sheet(GUIDE, 0)
-    lines = [
-        "■ このファイルの使い方（Excelだけで完結します。Pythonなどは使いません）",
-        "　　文字の大きさを自動でそろえたいときは、「マクロ」シートの手順を1回だけ行ってください。",
-        "",
-        "1.「入力」シートに、名列順で生徒の情報を入力します（黄色いセル）。",
-        "   ・学科は6種類からドロップダウンで選べます（空欄なら「設定」の既定の学科）。",
-        "   ・郵便番号を入れると、ふりがな（住所）が自動で入ります（大阪府・和歌山県・奈良県）。",
-        "     連絡先のふりがなも、連絡先の郵便番号から同じように入ります。",
-        "     読みを直したいときは、そのセルに上から書き込んでください（そのセルだけ自動が外れます）。",
-        "     郵便番号では町名までしか分からないので、番地の読みが要るときは書き足してください。",
-        "   ・連絡先を空欄にすると、履歴書には自動で「同上」と入ります。",
-        "   ・生年月日は「2008/5/12」のように日付で入力してください（元号と満○歳は自動）。",
-        "   ・資格の取得年月は「令和6年6月」「2024/6」「2024/6/10」のどれでも読めます。",
-        "",
-        "2.「履歴書」シートが、そのまま印刷する用紙です（1人＝1ページ・上から入力シートのNo順）。",
-        "   画面をスクロールすれば、印刷前に全員分を確認できます。",
-        "   ・資格は取得年月の古い順に、11ポイントで印字します。",
-        "     （用紙の欄の高さは変えられないので、欄に入りきらない分は表示されません。",
-        "　　　 資格が多い生徒がいるときは「マクロ」シートの手順（3分）を1回だけ行ってください）",
-        "",
-        "3. 印刷・PDFにする（No.○ から No.○ まで）",
-        "   ①「設定」シートの【開始No】【終了No】に番号を入れます（1人だけなら同じ番号）。",
-        "   ②【▶ 印刷する】ボタンを押すと「履歴書」シートに移動します。",
-        "   ③ そのまま Ctrl+P（ファイル → 印刷）→ 指定した範囲だけが印刷されます。",
-        "      PDFにするときは、印刷画面のプリンターで「Microsoft Print to PDF」を選ぶか、",
-        "      ファイル → 名前を付けて保存 → ファイルの種類で「PDF」を選びます。",
-        "   ※ 範囲がうまく効かないときは、印刷画面の「ページ指定」に同じ番号を入れてください。",
-        "     1ページ＝生徒1人なので、ページ番号＝入力シートのNo です。",
-        "",
-        "■ 資格をまとめて取り込む（貼り付けるだけ）",
-        "「資格取込」シートのA6以降に、資格取得の一覧を1行1件で貼り付けてください。",
-        "   例) 3-2-15〔タブ〕山田 太郎 基礎製図検定 令和6年7月10日",
-        "   ・氏名は「山田 太郎」のように姓と名が離れていてもかまいません。",
-        "   ・学年-組-出席番号 → 氏名 → 資格名 → 取得日 の順（区切りは空白でもタブでも可）",
-        "   ・先頭の番号がないときは氏名で照合します。",
-        "   ・「状態」の列に 反映／重複／要確認 が出るので、要確認の行だけ直してください。",
-        "   ・手入力した資格と合わせて、取得年月の古い順に並べて印字します（最大14件）。",
-        "",
-        "■ 各シートの役割",
-        "・入力　　　… 生徒の情報（1行＝1生徒）",
-        "・履歴書　　… 印刷する用紙（1人＝1ページ）",
-        "・設定　　　… 印刷する範囲、基準日、学校名、既定の学科、卒業（見込）年月",
-        "・反映項目　… 履歴書に出す項目を○×で選ぶ",
-        "・学科マスタ… 在籍校欄に出る学科（6種類）",
-        "・資格取込　… 資格一覧を貼り付けると、名簿と照合して自動で振り分けます",
-        "・資格マスタ… 入力した資格名を正式名称に直す変換表",
-        "・マクロ　　… 文字の大きさを自動でそろえる仕組みの入れかた（入れなくても使えます）",
-        "・資格集約／計算／郵便番号 … 自動計算用（非表示・さわらないでください）",
-        "",
-        "■ 自動で入るもの",
-        "・満○歳　　… 生年月日と「設定」の基準日から計算します。",
-        "・元号の年　… 生年月日から自動で計算します（昭和・平成の丸は手で付けてください）。",
-        "・郵便番号　… 7桁の数字だけでも 123-4567 の形にします。",
-        "・住所のふりがな … 郵便番号から自動で入ります（手で入れた場合はそちらが優先）。",
-        "・連絡先　　… 空欄なら「同上」。",
-        "・資格　　　… 取得年月の古い順に並べ、資格マスタの正式名称で印字します（最大14件）。",
-        "・在籍校　　… 「設定」の学校名と、生徒ごとの学科を組み合わせます。",
-        "",
-        "■ 欄に入りきらないとき（資格・校内外の諸活動・志望の動機・備考）",
-        "・用紙の行の高さは左の欄と共有しているため、高さを変えると様式が崩れます。",
-        "　そのため、この4つの欄は「文字の大きさ」で調整します。",
-        "・「マクロ」シートの手順（3分・1回だけ）を行うと、欄ごとに入りきる大きさ",
-        "　（最大11ポイント・最小6ポイント）へ自動でそろい、あふれなくなります。",
-        "　同じフォルダーの 履歴書マクロ.bas を読み込むだけです（貼り付けではありません）。",
-        "・入れない場合は、入力する文章を短くして調整してください。",
-        "",
-        "■ 注意",
-        "・写真は印刷した用紙に貼ってください。",
-        "・職歴の「平成／令和」の丸は、印刷後に手で付けてください。",
-        "・非表示のシートは変えないでください。",
-    ]
-    for i, line in enumerate(lines, start=1):
-        cell = ws.cell(row=i, column=1, value=line)
-        if line.startswith("■"):
-            cell.font = Font(bold=True, size=11)
-    ws.column_dimensions["A"].width = 96
     ws.sheet_view.showGridLines = False
+
+    title = Font(size=16, bold=True, color="1F3864")
+    step = Font(size=12, bold=True, color="FFFFFF")
+    head = Font(size=11, bold=True, color="1F3864")
+    body = Font(size=11)
+    note = note_font()
+    step_fill = PatternFill("solid", fgColor="2C6FBB")
+    name_font = Font(size=11, bold=True)
+
+    ws["A1"] = "履歴書 自動作成（近畿高等学校統一用紙 その2）"
+    ws["A1"].font = title
+    ws["A2"] = "「入力」に打ち込む → 「履歴書」が出来上がる → 「設定」で範囲を決めて印刷。この3つだけです。"
+    ws["A2"].font = note
+
+    for ref, text, target in (("A4", "① 入力シートへ", ROSTER),
+                              ("B4", "③ 設定・印刷へ", SETTINGS),
+                              ("C4", "資格をまとめて取込", PASTE),
+                              ("D4", "文字の大きさをそろえる", MACRO_SHEET)):
+        link_button(ws, ref, text, target)
+    ws.row_dimensions[4].height = 26
+
+    def put(row: int, text: str, font: Font) -> None:
+        ws.cell(row=row, column=1, value=text).font = font
+
+    def step_bar(row: int, text: str) -> None:
+        ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=4)
+        cell = ws.cell(row=row, column=1, value=text)
+        cell.font, cell.fill = step, step_fill
+        cell.alignment = Alignment(horizontal="left", vertical="center", indent=1)
+        ws.row_dimensions[row].height = 28
+
+    step_bar(6, "STEP 1　「入力」シートに打ち込む（黄色いセルだけ・1行＝1生徒）")
+    for i, text in enumerate([
+        "生年月日は 2008/5/12 と入れるだけ　→　元号と満○歳は自動",
+        "郵便番号を入れるだけ　→　住所のふりがなが自動（直したいときは上から書けばOK）",
+        "連絡先を空欄にする　→　履歴書には「同上」",
+        "学科はドロップダウンから選ぶ（空欄なら「設定」の学科）",
+    ], start=7):
+        put(i, "　・" + text, body)
+
+    step_bar(12, "STEP 2　「履歴書」シートを見る（1人＝1ページ・Noの順）")
+    put(13, "　　打ち込んだ内容がそのまま用紙に入っています。スクロールで全員分を確認できます。", body)
+
+    step_bar(15, "STEP 3　印刷・PDFにする")
+    put(16, "　① 「設定」シートで【開始No】と【終了No】を入れる（1人だけなら同じ番号）", body)
+    put(17, "　②【▶ 印刷する】を押す　→　③ そのまま Ctrl + P", body)
+    put(18, "　　PDFにするときは、印刷画面のプリンターで「Microsoft Print to PDF」を選びます。", note)
+
+    put(20, "■ 資格をまとめて取り込む", head)
+    put(21, "　「資格取込」シートのA6以降に、資格の一覧を1行1件で貼り付けるだけです。", body)
+    put(22, "　　3-2-15〔タブ〕山田 太郎　基礎製図検定　令和6年7月10日", Font(size=10, name="ＭＳ ゴシック"))
+    put(23, "　名簿と照合して自動で振り分けます。「状態」の列が赤い行だけ直してください。", body)
+
+    put(25, "■ 文字が欄に入りきらないとき", head)
+    put(26, "　「マクロ」シートの手順（1回だけ・3分）を行うと、資格・諸活動・志望の動機・備考の", body)
+    put(27, "　文字の大きさが、欄に収まるよう自動でそろいます（最大11ポイント）。", body)
+
+    put(29, "■ シートの役割", head)
+    sheets = [
+        (ROSTER, "生徒の情報を打ち込む（1行＝1生徒・40人分）"),
+        (FORM_SHEET, "印刷する用紙。さわらなくて大丈夫です"),
+        (SETTINGS, "印刷する範囲・学校名・基準日・卒業年月"),
+        (PASTE, "資格の一覧を貼り付けて自動で振り分ける"),
+        (FIELDS, "履歴書に出す項目を○×で選ぶ"),
+        (COURSES, "学科の一覧（6種類・書き換え可）"),
+        (MASTER, "資格名を正式名称に直す変換表"),
+        (MACRO_SHEET, "文字の大きさをそろえる仕組みの入れかた"),
+    ]
+    for i, (name, what) in enumerate(sheets, start=30):
+        ws.cell(row=i, column=1, value="　" + name).font = name_font
+        ws.cell(row=i, column=2, value=what).font = body
+
+    put(39, "■ 印刷したあとに手で書き足すところ", head)
+    put(40, "　・写真を貼る", body)
+    put(41, "　・生年月日の「昭和・平成」、職歴の「平成・令和」に丸を付ける", body)
+
+    for col, width in (("A", 26), ("B", 30), ("C", 24), ("D", 26)):
+        ws.column_dimensions[col].width = width
 
 
 # ------------------------------------------------------------------ 履歴書シート
@@ -1418,6 +1536,7 @@ def build(official: Path, out: Path, students: list[dict] | None = None,
     order = [GUIDE, ROSTER, PASTE, SETTINGS, FIELDS, COURSES, MASTER,
              FORM_SHEET, MACRO_SHEET, GATHER, CALC, ZIPCODES]
     wb._sheets.sort(key=lambda ws: order.index(ws.title) if ws.title in order else 99)
+    color_tabs(wb)
     wb.active = 0
     out.parent.mkdir(parents=True, exist_ok=True)
     wb.save(out)
