@@ -103,6 +103,11 @@ REMARKS_CELL = "BW76:DU87"
 LICENSE_YM_COLS = ("BW", "CG")
 LICENSE_NAME_COLS = ("CH", "DU")
 LICENSE_FONT_SIZE = 11.0
+# 1人分（91行）を必ず1ページに収めるための印刷設定
+SPACER_ROW_HEIGHT = 1.5      # 1人分の最後の行（区切り用）。低くして高さを稼ぐ
+PRINT_MARGIN_TB = 0.25       # 上下の余白(inch)
+PRINT_MARGIN_HF = 0.15       # ヘッダー・フッターの余白(inch)。上下より小さくする
+PRINT_SCALE = 92             # 縮小率(%)
 BODY_FONT_SIZE = 11.0        # 校内外の諸活動・志望の動機・備考
 
 # 用紙の行は左側の欄（氏名・生年月日・現住所）と共有しているため、
@@ -1192,6 +1197,8 @@ def build_guide(wb) -> None:
     put(16, "　① 「設定」シートで【開始No】と【終了No】を入れる（1人だけなら同じ番号）", body)
     put(17, "　②【▶ 印刷する】を押す　→　③ そのまま Ctrl + P", body)
     put(18, "　　PDFにするときは、印刷画面のプリンターで「Microsoft Print to PDF」を選びます。", note)
+    put(19, "　　※ 1人＝1ページです。印刷プレビューのページ数が人数と違うときは、"
+            "「設定」の拡大縮小を92%に戻してください。", note)
 
     put(20, "■ 資格をまとめて取り込む", head)
     put(21, "　「資格取込」シートのA6以降に、資格の一覧を1行1件で貼り付けるだけです。", body)
@@ -1321,6 +1328,16 @@ def build_form_sheet(wb, src, title: str = FORM_SHEET, *, license_size=None) -> 
     ws.page_setup = copy(src.page_setup)
     ws.page_margins = copy(src.page_margins)
     ws.print_options = copy(src.print_options)
+
+    # 1人分（1ブロック）が必ず1ページに収まるようにする。
+    # 元の様式は 97% ・上下余白 0.354inch で、用紙の高さ(544pt)に対して
+    # 中身(602pt×0.97=584pt)がはみ出し、1人が2ページに分かれていた。
+    ws.page_setup.scale = PRINT_SCALE
+    ws.page_setup.fitToWidth = None
+    ws.page_setup.fitToHeight = None
+    ws.sheet_properties.pageSetUpPr.fitToPage = False
+    ws.page_margins.top = ws.page_margins.bottom = PRINT_MARGIN_TB
+    ws.page_margins.header = ws.page_margins.footer = PRINT_MARGIN_HF
     for key, dim in src.column_dimensions.items():
         new = copy(dim)
         new.worksheet = ws
@@ -1341,9 +1358,10 @@ def build_form_sheet(wb, src, title: str = FORM_SHEET, *, license_size=None) -> 
                     new._style = copy(cell._style)
         for r in range(1, BLOCK_ROWS + 1):
             dim = src.row_dimensions.get(r)
-            ws.row_dimensions[r + offset].height = (
-                dim.height if dim is not None and dim.height else default_height
-            )
+            height = dim.height if dim is not None and dim.height else default_height
+            if r == BLOCK_ROWS:          # 1人分の区切り行。低くしてページに収める
+                height = SPACER_ROW_HEIGHT
+            ws.row_dimensions[r + offset].height = height
         for rng in merges:
             ws.merge_cells(shift(rng, offset))
         fill_form(ws, i, offset, license_size=license_size)
