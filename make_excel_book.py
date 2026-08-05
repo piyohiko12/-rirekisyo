@@ -103,11 +103,16 @@ REMARKS_CELL = "BW76:DU87"
 LICENSE_YM_COLS = ("BW", "CG")
 LICENSE_NAME_COLS = ("CH", "DU")
 LICENSE_FONT_SIZE = 11.0
-# 1人分（91行）を必ず1ページに収めるための印刷設定
-SPACER_ROW_HEIGHT = 1.5      # 1人分の最後の行（区切り用）。低くして高さを稼ぐ
-PRINT_MARGIN_TB = 0.25       # 上下の余白(inch)
-PRINT_MARGIN_HF = 0.15       # ヘッダー・フッターの余白(inch)。上下より小さくする
-PRINT_SCALE = 92             # 縮小率(%)
+# 1人分を必ず1ページに収めるための印刷設定。
+# 縮小率は公式様式のまま（97%）＝枠の大きさは正式なものから変えない。
+# 用紙に収める分は、何も描かれていない下2行（90・91行目）を高さ0にし、
+# 上下の余白を詰めることでまかなう（余白は枠の大きさに影響しない）。
+PRINT_SCALE = 97             # 縮小率(%)。公式様式と同じ＝枠は原寸
+BLANK_TAIL_ROWS = 2          # 1人分の下端の空き行（90・91行目）。高さ0にする
+PRINT_MARGIN_TOP = 0.08      # 上の余白(inch)
+PRINT_MARGIN_BOTTOM = 0.16   # 下の余白(inch)
+PRINT_MARGIN_HEADER = 0.05   # ヘッダーの余白(inch)。上の余白以下にする
+PRINT_MARGIN_FOOTER = 0.10   # フッターの余白(inch)。下の余白以下にする
 BODY_FONT_SIZE = 11.0        # 校内外の諸活動・志望の動機・備考
 
 # 用紙の行は左側の欄（氏名・生年月日・現住所）と共有しているため、
@@ -1197,8 +1202,7 @@ def build_guide(wb) -> None:
     put(16, "　① 「設定」シートで【開始No】と【終了No】を入れる（1人だけなら同じ番号）", body)
     put(17, "　②【▶ 印刷する】を押す　→　③ そのまま Ctrl + P", body)
     put(18, "　　PDFにするときは、印刷画面のプリンターで「Microsoft Print to PDF」を選びます。", note)
-    put(19, "　　※ 1人＝1ページです。印刷プレビューのページ数が人数と違うときは、"
-            "「設定」の拡大縮小を92%に戻してください。", note)
+    put(19, "　　※ 1人＝1ページ・枠は公式様式と同じ大きさ（拡大縮小97%）です。", note)
 
     put(20, "■ 資格をまとめて取り込む", head)
     put(21, "　「資格取込」シートのA6以降に、資格の一覧を1行1件で貼り付けるだけです。", body)
@@ -1332,12 +1336,15 @@ def build_form_sheet(wb, src, title: str = FORM_SHEET, *, license_size=None) -> 
     # 1人分（1ブロック）が必ず1ページに収まるようにする。
     # 元の様式は 97% ・上下余白 0.354inch で、用紙の高さ(544pt)に対して
     # 中身(602pt×0.97=584pt)がはみ出し、1人が2ページに分かれていた。
+    # 縮小率は 97% のまま（枠は原寸）。下端の空き行と余白だけで収める。
     ws.page_setup.scale = PRINT_SCALE
     ws.page_setup.fitToWidth = None
     ws.page_setup.fitToHeight = None
     ws.sheet_properties.pageSetUpPr.fitToPage = False
-    ws.page_margins.top = ws.page_margins.bottom = PRINT_MARGIN_TB
-    ws.page_margins.header = ws.page_margins.footer = PRINT_MARGIN_HF
+    ws.page_margins.top = PRINT_MARGIN_TOP
+    ws.page_margins.bottom = PRINT_MARGIN_BOTTOM
+    ws.page_margins.header = PRINT_MARGIN_HEADER
+    ws.page_margins.footer = PRINT_MARGIN_FOOTER
     for key, dim in src.column_dimensions.items():
         new = copy(dim)
         new.worksheet = ws
@@ -1359,9 +1366,10 @@ def build_form_sheet(wb, src, title: str = FORM_SHEET, *, license_size=None) -> 
         for r in range(1, BLOCK_ROWS + 1):
             dim = src.row_dimensions.get(r)
             height = dim.height if dim is not None and dim.height else default_height
-            if r == BLOCK_ROWS:          # 1人分の区切り行。低くしてページに収める
-                height = SPACER_ROW_HEIGHT
             ws.row_dimensions[r + offset].height = height
+            if r > BLOCK_ROWS - BLANK_TAIL_ROWS:
+                # 何も描かれていない下端の行。非表示にして印刷の高さから外す
+                ws.row_dimensions[r + offset].hidden = True
         for rng in merges:
             ws.merge_cells(shift(rng, offset))
         fill_form(ws, i, offset, license_size=license_size)
