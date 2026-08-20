@@ -92,8 +92,12 @@ CONTACT_KANA_CELL = "L34:BI36"
 CONTACT_ZIP_CELL = "P37:AJ39"
 CONTACT_CELL = "L40:BI41"
 SCHOOL_CELL = "Y54:AV59"          # 学校名＋学科（元から結合済み）
-GRAD_YEAR_CELL = "P55:R57"        # 卒業（見込）年
-GRAD_MONTH_CELL = "U55:V57"       # 同 月
+# 卒業（見込）年月。元の様式は 行55〜57 の結合だが、隣の「令和」「年」「月」は
+# 行56〜57 なので、そのままだと数字だけ半行ぶん上にずれる。行56〜57にそろえる。
+GRAD_YEAR_SRC = "P55:R57"
+GRAD_MONTH_SRC = "U55:V57"
+GRAD_YEAR_CELL = "P56:R57"        # 卒業（見込）年
+GRAD_MONTH_CELL = "U56:V57"       # 同 月
 TODAY_YEAR_CELL = "AD8:AF10"      # 「令和　年　月　日現在」
 TODAY_MONTH_CELL = "AI8:AK10"
 TODAY_DAY_CELL = "AN8:AO10"
@@ -1318,6 +1322,14 @@ def build_guide(wb) -> None:
 
 
 # ------------------------------------------------------------------ 履歴書シート
+def _cells_in(ref: str) -> list[str]:
+    """'P55:R57' に含まれるセル名をすべて返す。"""
+    from openpyxl.utils import range_boundaries
+
+    c1, r1, c2, r2 = range_boundaries(ref)
+    return [f"{get_column_letter(c)}{r}" for r in range(r1, r2 + 1) for c in range(c1, c2 + 1)]
+
+
 def shift(ref: str, offset: int) -> str:
     """セル範囲の行番号をずらす（例: L11:AT14 → L102:AT105）。"""
     return re.sub(r"([A-Z]+)(\d+)", lambda m: f"{m.group(1)}{int(m.group(2)) + offset}", ref)
@@ -1336,7 +1348,7 @@ def fill_form(ws, i: int, offset: int = 0, *, license_size=None) -> None:
     set_cell(ws, shift(BIRTH_YEAR_CELL, offset), calc("D"), align="center", size=NARROW_NUM_SIZE)
     set_cell(ws, shift(BIRTH_MONTH_CELL, offset), calc("E"), align="center", size=WIDE_NUM_SIZE)
     set_cell(ws, shift(BIRTH_DAY_CELL, offset), calc("F"), align="center", size=WIDE_NUM_SIZE)
-    set_cell(ws, shift(BIRTH_AGE_CELL, offset), calc("G"), align="center", size=NARROW_NUM_SIZE)
+    set_cell(ws, shift(BIRTH_AGE_CELL, offset), calc("G"), align="center", size=DATE_NUM_SIZE)
 
     set_cell(ws, shift(ADDR_ZIP_CELL, offset), calc("H"), size=BODY_FONT_SIZE)
     set_cell(ws, shift(ADDR_CELL, offset), calc("I"), size=BODY_FONT_SIZE, wrap=True, indent=1)
@@ -1356,6 +1368,16 @@ def fill_form(ws, i: int, offset: int = 0, *, license_size=None) -> None:
     def only_if_used(formula: str) -> str:
         return f'=IF({used}="","",{formula})&""'
 
+    # 元の結合（行55〜57）を外して行56〜57に貼り直す。
+    # 外したあとは、元の様式に入っていた値が行55に残るので消しておく。
+    for src_ref, new_ref in ((GRAD_YEAR_SRC, GRAD_YEAR_CELL), (GRAD_MONTH_SRC, GRAD_MONTH_CELL)):
+        moved = shift(src_ref, offset)
+        if moved in {str(r) for r in ws.merged_cells.ranges}:
+            ws.unmerge_cells(moved)
+        keep = set(_cells_in(shift(new_ref, offset)))
+        for coord in _cells_in(moved):
+            if coord not in keep:
+                ws[coord].value = None
     set_cell(ws, shift(GRAD_YEAR_CELL, offset), only_if_used(f"{SETTINGS}!$B$6"),
              align="center", size=DATE_NUM_SIZE)
     set_cell(ws, shift(GRAD_MONTH_CELL, offset), only_if_used(f"{SETTINGS}!$B$7"),
