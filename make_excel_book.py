@@ -292,7 +292,7 @@ def build_roster(wb, students: list[dict] | None) -> None:
     ws.cell(
         row=1, column=6,
         value="■ 黄色 ＝ 打ち込むところ　　■ 水色 ＝ 自動で入るところ（上から書けば手入力が優先）"
-              "　　名前が空の行はグレーになります",
+              "　　名前を入れると、使っていない行がグレーになります",
     ).font = small
     ws.row_dimensions[1].height = 20
 
@@ -386,12 +386,15 @@ def build_roster(wb, students: list[dict] | None) -> None:
     group_columns("job.1.ym", "job.2.text", collapsed=True)
     ws.sheet_properties.outlinePr.summaryRight = True
 
-    # 名前が入っていない行は薄いグレーにして、使っていないことを分かるようにする
+    # 名前が入っていない行は薄いグレーにして、使っていないことを分かるようにする。
+    # ただし1人も入力していないうちは効かせない（黄色・水色の色分けが見えなくなるため）。
     last_row = ROSTER_FIRST_ROW + STUDENTS - 1
+    name_col = roster_col("name")
     body_range = f"A{ROSTER_FIRST_ROW}:{get_column_letter(len(cols))}{last_row}"
     ws.conditional_formatting.add(body_range, FormulaRule(
-        formula=[f'${roster_col("name")}{ROSTER_FIRST_ROW}=""'],
-        fill=PatternFill(bgColor="F5F5F5"), stopIfTrue=True))
+        formula=[f'AND(${name_col}{ROSTER_FIRST_ROW}="",'
+                 f'COUNTA(${name_col}${ROSTER_FIRST_ROW}:${name_col}${last_row})>0)'],
+        fill=PatternFill(bgColor="F2F2F2"), stopIfTrue=True))
 
     # セルを選んだときに出る入力のヒント
     hints = {
@@ -1808,6 +1811,11 @@ def main(argv: list[str] | None = None) -> int:
                     s[key] = _as_date(value)
         for s, course in zip(students, (COURSE_LIST[2], COURSE_LIST[0], COURSE_LIST[4])):
             s["course"] = course
+        for s in students:          # 郵便番号は数値で入れる（000-0000 の表示になる）
+            for key in ("zip", "contact_zip"):
+                digits = str(s.get(key, "")).replace("-", "")
+                if digits.isdigit():
+                    s[key] = int(digits)
         for s in students:          # 志望の動機・希望の職種・アピールポイントは1つの欄にまとめる
             parts = [s.pop(k, "") for k in ("motivation",) + MERGED_INTO_MOTIVATION]
             s["motivation"] = "\n".join(x for x in parts if x)
