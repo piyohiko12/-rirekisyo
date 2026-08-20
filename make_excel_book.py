@@ -109,12 +109,17 @@ LICENSE_FONT_SIZE = 11.0
 # 上下の余白を詰めることでまかなう（余白は枠の大きさに影響しない）。
 PRINT_SCALE = 97             # 縮小率(%)。公式様式と同じ＝枠は原寸
 BLANK_TAIL_ROWS = 2          # 1人分の下端の空き行（90・91行目）。高さ0にする
-# 上下の余白は左右と同じく「同じ幅」にし、さらに上下中央そろえを効かせる。
-# 公式様式も上下の余白が同じ（0.354inch）＝用紙の上下中央に置く設計のため、
-# 用紙上の位置が元データと同じ考え方になる。
-PRINT_MARGIN_TB = 0.12       # 上下の余白(inch)
-PRINT_MARGIN_HEADER = 0.05   # ヘッダーの余白(inch)。上下の余白以下にする
-PRINT_MARGIN_FOOTER = 0.05   # フッターの余白(inch)。上下の余白以下にする
+# 用紙の真ん中に置く。余白は小さめにしておき、実際の位置は
+# 「ページ中央（水平・垂直）」に任せる。
+PRINT_MARGIN = 0.1           # 上下左右の余白(inch)
+PRINT_MARGIN_HEADER = 0.05   # ヘッダー・フッターの余白(inch)。余白以下にする
+
+# 印刷しない行・列（何も描かれていない外周）。
+# ここを外すと、枠の大きさを変えずに用紙の中央へ寄せられる。
+BLANK_TOP_ROWS = (1, 2)      # 1人分の上端の空き行
+BLANK_TAIL_ROW = 91          # 1人分の下端の区切り行（90行目は下段の文言に使う）
+FORM_FIRST_COL = 4           # 用紙の中身がある最初の列（D）
+FORM_LAST_COL = 126          # 同 最後の列（DV）
 BODY_FONT_SIZE = 11.0        # 校内外の諸活動・志望の動機・備考
 
 # 用紙の行は左側の欄（氏名・生年月日・現住所）と共有しているため、
@@ -1408,12 +1413,12 @@ def build_form_sheet(wb, src, title: str = FORM_SHEET, *, license_size=None) -> 
     ws.page_setup.fitToWidth = None
     ws.page_setup.fitToHeight = None
     ws.sheet_properties.pageSetUpPr.fitToPage = False
-    ws.page_margins.top = ws.page_margins.bottom = PRINT_MARGIN_TB
-    ws.page_margins.header = PRINT_MARGIN_HEADER
-    ws.page_margins.footer = PRINT_MARGIN_FOOTER
-    # 左右は公式様式のまま。上下だけ中央にそろえて、用紙上の位置を毎回同じにする
+    ws.page_margins.left = ws.page_margins.right = PRINT_MARGIN
+    ws.page_margins.top = ws.page_margins.bottom = PRINT_MARGIN
+    ws.page_margins.header = ws.page_margins.footer = PRINT_MARGIN_HEADER
+    # 用紙の中央に置く（印刷範囲を用紙の中身だけに絞ってあるので、枠が中央に来る）
+    ws.print_options.horizontalCentered = True
     ws.print_options.verticalCentered = True
-    ws.print_options.horizontalCentered = False
     for key, dim in src.column_dimensions.items():
         new = copy(dim)
         new.worksheet = ws
@@ -1436,8 +1441,9 @@ def build_form_sheet(wb, src, title: str = FORM_SHEET, *, license_size=None) -> 
             dim = src.row_dimensions.get(r)
             height = dim.height if dim is not None and dim.height else default_height
             ws.row_dimensions[r + offset].height = height
-            if r > BLOCK_ROWS - BLANK_TAIL_ROWS:
-                # 何も描かれていない下端の行。非表示にして印刷の高さから外す
+            if r in BLANK_TOP_ROWS or r == BLANK_TAIL_ROW:
+                # 何も描かれていない行。非表示にして印刷の高さから外す
+                # （90行目は「(近畿高等学校統一用紙…)」の結合セルに使うので残す）
                 ws.row_dimensions[r + offset].hidden = True
         for rng in merges:
             ws.merge_cells(shift(rng, offset))
@@ -1449,8 +1455,8 @@ def build_form_sheet(wb, src, title: str = FORM_SHEET, *, license_size=None) -> 
     start = f"MAX(1,MIN({STUDENTS},N({SETTINGS}!$B$9)))"
     end = f"MAX({start},MIN({STUDENTS},N({SETTINGS}!$B$10)))"
     area = (
-        f"OFFSET('{title}'!$A$1,({start}-1)*{BLOCK_ROWS},0,"
-        f"({end}-{start}+1)*{BLOCK_ROWS},{src.max_column})"
+        f"OFFSET('{title}'!$A$1,({start}-1)*{BLOCK_ROWS},{FORM_FIRST_COL - 1},"
+        f"({end}-{start}+1)*{BLOCK_ROWS},{FORM_LAST_COL - FORM_FIRST_COL + 1})"
     )
     ws.defined_names.add(DefinedName("_xlnm.Print_Area", attr_text=area))
 
