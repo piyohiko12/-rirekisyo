@@ -372,12 +372,18 @@ def build_roster(wb, students: list[dict] | None) -> None:
     ws.freeze_panes = ws.cell(row=ROSTER_FIRST_ROW, column=5)
 
     # 資格と職歴はふだん見ないので、まとめて折りたためるようにする（職歴は最初から閉じる）
-    first_license = get_column_letter(roster_index("license.1.name"))
-    last_license = get_column_letter(roster_index(f"license.{LICENSE_SLOTS}.ym"))
-    first_job = get_column_letter(roster_index("job.1.ym"))
-    last_job = get_column_letter(roster_index("job.2.text"))
-    ws.column_dimensions.group(first_license, last_license, outline_level=1, hidden=False)
-    ws.column_dimensions.group(first_job, last_job, outline_level=1, hidden=True)
+    def group_columns(first_key: str, last_key: str, *, collapsed: bool) -> None:
+        """列をまとめて折りたためるようにする（列幅は列ごとのまま残す）。"""
+        first, last = roster_index(first_key), roster_index(last_key)
+        for c in range(first, last + 1):
+            dim = ws.column_dimensions[get_column_letter(c)]
+            dim.outlineLevel = 1
+            dim.hidden = collapsed
+        after = ws.column_dimensions[get_column_letter(last + 1)]
+        after.collapsed = collapsed        # 右側の列に ＋/− ボタンが出る
+
+    group_columns("license.1.name", f"license.{LICENSE_SLOTS}.ym", collapsed=False)
+    group_columns("job.1.ym", "job.2.text", collapsed=True)
     ws.sheet_properties.outlinePr.summaryRight = True
 
     # 名前が入っていない行は薄いグレーにして、使っていないことを分かるようにする
