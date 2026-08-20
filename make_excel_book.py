@@ -109,10 +109,12 @@ LICENSE_FONT_SIZE = 11.0
 # 上下の余白を詰めることでまかなう（余白は枠の大きさに影響しない）。
 PRINT_SCALE = 97             # 縮小率(%)。公式様式と同じ＝枠は原寸
 BLANK_TAIL_ROWS = 2          # 1人分の下端の空き行（90・91行目）。高さ0にする
-PRINT_MARGIN_TOP = 0.08      # 上の余白(inch)
-PRINT_MARGIN_BOTTOM = 0.16   # 下の余白(inch)
-PRINT_MARGIN_HEADER = 0.05   # ヘッダーの余白(inch)。上の余白以下にする
-PRINT_MARGIN_FOOTER = 0.10   # フッターの余白(inch)。下の余白以下にする
+# 上下の余白は左右と同じく「同じ幅」にし、さらに上下中央そろえを効かせる。
+# 公式様式も上下の余白が同じ（0.354inch）＝用紙の上下中央に置く設計のため、
+# 用紙上の位置が元データと同じ考え方になる。
+PRINT_MARGIN_TB = 0.12       # 上下の余白(inch)
+PRINT_MARGIN_HEADER = 0.05   # ヘッダーの余白(inch)。上下の余白以下にする
+PRINT_MARGIN_FOOTER = 0.05   # フッターの余白(inch)。上下の余白以下にする
 BODY_FONT_SIZE = 11.0        # 校内外の諸活動・志望の動機・備考
 
 # 用紙の行は左側の欄（氏名・生年月日・現住所）と共有しているため、
@@ -1406,10 +1408,12 @@ def build_form_sheet(wb, src, title: str = FORM_SHEET, *, license_size=None) -> 
     ws.page_setup.fitToWidth = None
     ws.page_setup.fitToHeight = None
     ws.sheet_properties.pageSetUpPr.fitToPage = False
-    ws.page_margins.top = PRINT_MARGIN_TOP
-    ws.page_margins.bottom = PRINT_MARGIN_BOTTOM
+    ws.page_margins.top = ws.page_margins.bottom = PRINT_MARGIN_TB
     ws.page_margins.header = PRINT_MARGIN_HEADER
     ws.page_margins.footer = PRINT_MARGIN_FOOTER
+    # 左右は公式様式のまま。上下だけ中央にそろえて、用紙上の位置を毎回同じにする
+    ws.print_options.verticalCentered = True
+    ws.print_options.horizontalCentered = False
     for key, dim in src.column_dimensions.items():
         new = copy(dim)
         new.worksheet = ws
