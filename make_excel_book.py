@@ -134,6 +134,9 @@ JOB_TEXT_COLS = ("Y", "BI")
 FORM_FONT = "ＭＳ Ｐ明朝"
 # 用紙の数字欄はとても狭い（2列＝約16ピクセル）。大きい文字だと Excel で ### になるため、
 # 欄の幅に合わせて文字サイズを決める。
+NAME_SIZE = 16.0             # 名前
+NAME_KANA_SIZE = 10.0        # ふりがな（氏名）
+KANA_SIZE = 9.0              # ふりがな（住所・連絡先）
 DATE_NUM_SIZE = 9.5          # 基準日・在籍校欄（卒業年月）の数字はこの大きさでそろえる
 NARROW_NUM_SIZE = 8.0    # 2列分の欄（生年の和暦・満年齢・卒業月・職歴の月・日付の日）
 WIDE_NUM_SIZE = 9.5      # 3列分の欄（生月・生日・年・月）
@@ -956,10 +959,10 @@ Public Function 文字を整える実行() As Boolean
 
     ' --- 資格等。幅ごとにまとめて測ると速い（測定用の列幅を作り直さずに済む）
     For i = 1 To STUDENT_COUNT
-        pt年月(i) = 収まる大きさ(欄(frm, i, {ym}))
+        pt年月(i) = 収まる大きさ(欄(frm, i, {ym}), MAX_PT)
     Next i
     For i = 1 To STUDENT_COUNT
-        pt名称(i) = 収まる大きさ(欄(frm, i, {name}))
+        pt名称(i) = 収まる大きさ(欄(frm, i, {name}), MAX_PT)
     Next i
     ' 取得年月と名称は、行がずれないよう小さいほうにそろえる
     For i = 1 To STUDENT_COUNT
@@ -969,16 +972,17 @@ Public Function 文字を整える実行() As Boolean
         欄(frm, i, {name}).Font.Size = pt
     Next i
 
-    ' --- 校内外の諸活動・志望の動機・備考（3つとも同じ幅）
-    For i = 1 To STUDENT_COUNT
-        文字を合わせる 欄(frm, i, {vba_box(ACTIVITIES_CELL)})
-    Next i
-    For i = 1 To STUDENT_COUNT
-        文字を合わせる 欄(frm, i, {vba_box(MOTIVATION_CELL)})
-    Next i
-    For i = 1 To STUDENT_COUNT
-        文字を合わせる 欄(frm, i, {vba_box(REMARKS_CELL)})
-    Next i
+    ' --- そのほかの欄。欄ごとに「もとの大きさ」から下げていく
+    欄をそろえる frm, {vba_box(ACTIVITIES_CELL)}, MAX_PT     ' 校内外の諸活動
+    欄をそろえる frm, {vba_box(MOTIVATION_CELL)}, MAX_PT     ' 志望の動機ほか
+    欄をそろえる frm, {vba_box(REMARKS_CELL)}, MAX_PT     ' 備考
+    欄をそろえる frm, {vba_box(NAME_CELL)}, {NAME_SIZE}      ' 名前
+    欄をそろえる frm, {vba_box(NAME_KANA_CELL)}, {NAME_KANA_SIZE}      ' ふりがな（氏名）
+    欄をそろえる frm, {vba_box(ADDR_CELL)}, MAX_PT     ' 現住所
+    欄をそろえる frm, {vba_box(ADDR_KANA_CELL)}, {KANA_SIZE}       ' ふりがな（住所）
+    欄をそろえる frm, {vba_box(CONTACT_CELL)}, MAX_PT     ' 連絡先
+    欄をそろえる frm, {vba_box(CONTACT_KANA_CELL)}, {KANA_SIZE}       ' ふりがな（連絡先）
+    欄をそろえる frm, {vba_box(SCHOOL_CELL)}, MAX_PT     ' 在籍校
 
     測定終了
     元シート.Activate
@@ -1006,17 +1010,23 @@ Private Function 欄(frm As Worksheet, i As Long, _
     Set 欄 = frm.Range(frm.Cells(上 + off, 左), frm.Cells(下 + off, 右))
 End Function
 
-Private Sub 文字を合わせる(ByVal 対象 As Range)
-    対象.Font.Size = 収まる大きさ(対象)
+' 同じ欄を全員分そろえる（幅が同じものをまとめて測るので速い）
+Private Sub 欄をそろえる(frm As Worksheet, 上 As Long, 下 As Long, _
+                         左 As Long, 右 As Long, 基準 As Double)
+    Dim i As Long, 対象 As Range
+    For i = 1 To STUDENT_COUNT
+        Set 対象 = 欄(frm, i, 上, 下, 左, 右)
+        対象.Font.Size = 収まる大きさ(対象, 基準)
+    Next i
 End Sub
 
-' 欄に文章がちょうど収まる文字の大きさを返す
-Private Function 収まる大きさ(ByVal 対象 As Range) As Double
+' 欄に文章がちょうど収まる文字の大きさを返す（基準より大きくはしない）
+Private Function 収まる大きさ(ByVal 対象 As Range, ByVal 基準 As Double) As Double
     Dim v As Variant, s As String
     Dim pt As Double, 高さ As Double, 幅 As Double
     Dim フォント As String, 字下げ As Long
 
-    収まる大きさ = MAX_PT
+    収まる大きさ = 基準
     v = 対象.Cells(1, 1).Value
     If IsError(v) Then Exit Function
     s = 末尾を落とす(CStr(v))
@@ -1027,7 +1037,7 @@ Private Function 収まる大きさ(ByVal 対象 As Range) As Double
     フォント = 対象.Cells(1, 1).Font.Name
     字下げ = 対象.Cells(1, 1).IndentLevel
 
-    pt = MAX_PT
+    pt = 基準
     Do While pt > MIN_PT
         If 測る(s, 幅, フォント, pt, 字下げ) <= 高さ Then Exit Do
         pt = pt - STEP_PT
@@ -1321,8 +1331,8 @@ def fill_form(ws, i: int, offset: int = 0, *, license_size=None) -> None:
     def calc(col: str) -> str:
         return f"={CALC}!${col}${row}"
 
-    set_cell(ws, shift(NAME_KANA_CELL, offset), calc("C"), size=10, align="center", shrink=True)
-    set_cell(ws, shift(NAME_CELL, offset), calc("B"), size=16, align="center", shrink=True)
+    set_cell(ws, shift(NAME_KANA_CELL, offset), calc("C"), size=NAME_KANA_SIZE, align="center", wrap=True)
+    set_cell(ws, shift(NAME_CELL, offset), calc("B"), size=NAME_SIZE, align="center", wrap=True)
     set_cell(ws, shift(BIRTH_YEAR_CELL, offset), calc("D"), align="center", size=NARROW_NUM_SIZE)
     set_cell(ws, shift(BIRTH_MONTH_CELL, offset), calc("E"), align="center", size=WIDE_NUM_SIZE)
     set_cell(ws, shift(BIRTH_DAY_CELL, offset), calc("F"), align="center", size=WIDE_NUM_SIZE)
@@ -1330,12 +1340,12 @@ def fill_form(ws, i: int, offset: int = 0, *, license_size=None) -> None:
 
     set_cell(ws, shift(ADDR_ZIP_CELL, offset), calc("H"), size=BODY_FONT_SIZE)
     set_cell(ws, shift(ADDR_CELL, offset), calc("I"), size=BODY_FONT_SIZE, wrap=True, indent=1)
-    set_cell(ws, shift(ADDR_KANA_CELL, offset), calc("J"), size=9, indent=1)
+    set_cell(ws, shift(ADDR_KANA_CELL, offset), calc("J"), size=KANA_SIZE, indent=1, wrap=True)
 
     set_cell(ws, shift(CONTACT_ZIP_CELL, offset), calc("K"), size=BODY_FONT_SIZE)
     set_cell(ws, shift(CONTACT_CELL, offset), calc("L"), size=BODY_FONT_SIZE,
              wrap=True, indent=1)
-    set_cell(ws, shift(CONTACT_KANA_CELL, offset), calc("M"), size=9, indent=1)
+    set_cell(ws, shift(CONTACT_KANA_CELL, offset), calc("M"), size=KANA_SIZE, indent=1, wrap=True)
 
     set_cell(ws, shift(SCHOOL_CELL, offset), calc("N"), size=BODY_FONT_SIZE, wrap=True)
 

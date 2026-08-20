@@ -55,10 +55,10 @@ Public Function 文字を整える実行() As Boolean
 
     ' --- 資格等。幅ごとにまとめて測ると速い（測定用の列幅を作り直さずに済む）
     For i = 1 To STUDENT_COUNT
-        pt年月(i) = 収まる大きさ(欄(frm, i, 9, 29, 75, 85))
+        pt年月(i) = 収まる大きさ(欄(frm, i, 9, 29, 75, 85), MAX_PT)
     Next i
     For i = 1 To STUDENT_COUNT
-        pt名称(i) = 収まる大きさ(欄(frm, i, 9, 29, 86, 125))
+        pt名称(i) = 収まる大きさ(欄(frm, i, 9, 29, 86, 125), MAX_PT)
     Next i
     ' 取得年月と名称は、行がずれないよう小さいほうにそろえる
     For i = 1 To STUDENT_COUNT
@@ -68,16 +68,17 @@ Public Function 文字を整える実行() As Boolean
         欄(frm, i, 9, 29, 86, 125).Font.Size = pt
     Next i
 
-    ' --- 校内外の諸活動・志望の動機・備考（3つとも同じ幅）
-    For i = 1 To STUDENT_COUNT
-        文字を合わせる 欄(frm, i, 30, 46, 75, 125)
-    Next i
-    For i = 1 To STUDENT_COUNT
-        文字を合わせる 欄(frm, i, 47, 75, 75, 125)
-    Next i
-    For i = 1 To STUDENT_COUNT
-        文字を合わせる 欄(frm, i, 76, 87, 75, 125)
-    Next i
+    ' --- そのほかの欄。欄ごとに「もとの大きさ」から下げていく
+    欄をそろえる frm, 30, 46, 75, 125, MAX_PT     ' 校内外の諸活動
+    欄をそろえる frm, 47, 75, 75, 125, MAX_PT     ' 志望の動機ほか
+    欄をそろえる frm, 76, 87, 75, 125, MAX_PT     ' 備考
+    欄をそろえる frm, 15, 20, 12, 46, 16.0      ' 名前
+    欄をそろえる frm, 11, 14, 12, 46, 10.0      ' ふりがな（氏名）
+    欄をそろえる frm, 31, 33, 12, 61, MAX_PT     ' 現住所
+    欄をそろえる frm, 25, 27, 12, 61, 9.0       ' ふりがな（住所）
+    欄をそろえる frm, 40, 41, 12, 61, MAX_PT     ' 連絡先
+    欄をそろえる frm, 34, 36, 12, 61, 9.0       ' ふりがな（連絡先）
+    欄をそろえる frm, 54, 59, 25, 48, MAX_PT     ' 在籍校
 
     測定終了
     元シート.Activate
@@ -105,17 +106,23 @@ Private Function 欄(frm As Worksheet, i As Long, _
     Set 欄 = frm.Range(frm.Cells(上 + off, 左), frm.Cells(下 + off, 右))
 End Function
 
-Private Sub 文字を合わせる(ByVal 対象 As Range)
-    対象.Font.Size = 収まる大きさ(対象)
+' 同じ欄を全員分そろえる（幅が同じものをまとめて測るので速い）
+Private Sub 欄をそろえる(frm As Worksheet, 上 As Long, 下 As Long, _
+                         左 As Long, 右 As Long, 基準 As Double)
+    Dim i As Long, 対象 As Range
+    For i = 1 To STUDENT_COUNT
+        Set 対象 = 欄(frm, i, 上, 下, 左, 右)
+        対象.Font.Size = 収まる大きさ(対象, 基準)
+    Next i
 End Sub
 
-' 欄に文章がちょうど収まる文字の大きさを返す
-Private Function 収まる大きさ(ByVal 対象 As Range) As Double
+' 欄に文章がちょうど収まる文字の大きさを返す（基準より大きくはしない）
+Private Function 収まる大きさ(ByVal 対象 As Range, ByVal 基準 As Double) As Double
     Dim v As Variant, s As String
     Dim pt As Double, 高さ As Double, 幅 As Double
     Dim フォント As String, 字下げ As Long
 
-    収まる大きさ = MAX_PT
+    収まる大きさ = 基準
     v = 対象.Cells(1, 1).Value
     If IsError(v) Then Exit Function
     s = 末尾を落とす(CStr(v))
@@ -126,7 +133,7 @@ Private Function 収まる大きさ(ByVal 対象 As Range) As Double
     フォント = 対象.Cells(1, 1).Font.Name
     字下げ = 対象.Cells(1, 1).IndentLevel
 
-    pt = MAX_PT
+    pt = 基準
     Do While pt > MIN_PT
         If 測る(s, 幅, フォント, pt, 字下げ) <= 高さ Then Exit Do
         pt = pt - STEP_PT
