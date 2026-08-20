@@ -118,7 +118,7 @@ Private Function 収まる大きさ(ByVal 対象 As Range) As Double
     収まる大きさ = MAX_PT
     v = 対象.Cells(1, 1).Value
     If IsError(v) Then Exit Function
-    s = CStr(v)
+    s = 末尾を落とす(CStr(v))
     If Len(s) = 0 Then Exit Function
 
     高さ = 対象.Height - YOHAKU
@@ -132,6 +132,21 @@ Private Function 収まる大きさ(ByVal 対象 As Range) As Double
         pt = pt - STEP_PT
     Loop
     収まる大きさ = pt
+End Function
+
+' 末尾の空行・空白を落とす（あると、その分だけ文字が小さくなってしまう）
+Private Function 末尾を落とす(s As String) As String
+    Dim t As String
+    t = s
+    Do While Len(t) > 0
+        Select Case Right$(t, 1)
+            Case vbLf, vbCr, " ", ChrW(12288)
+                t = Left$(t, Len(t) - 1)
+            Case Else
+                Exit Do
+        End Select
+    Loop
+    末尾を落とす = t
 End Function
 
 ' 同じ幅・同じフォントで Excel に折り返させ、必要な高さ(pt)を実測する

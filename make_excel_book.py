@@ -37,7 +37,7 @@ from openpyxl.worksheet.hyperlink import Hyperlink
 from openpyxl.worksheet.pagebreak import Break
 from openpyxl.workbook.defined_name import DefinedName
 
-from rirekisho.inputs import DEFAULT_MASTER, OUTPUT_FIELDS, columns
+from rirekisho.inputs import DEFAULT_MASTER, OUTPUT_FIELDS, columns as _all_columns
 
 FORM_SHEET_SRC = "履歴書元データ"
 ROSTER = "入力"
@@ -127,8 +127,45 @@ JOB_TEXT_COLS = ("Y", "BI")
 FORM_FONT = "ＭＳ Ｐ明朝"
 # 用紙の数字欄はとても狭い（2列＝約16ピクセル）。大きい文字だと Excel で ### になるため、
 # 欄の幅に合わせて文字サイズを決める。
+DATE_NUM_SIZE = 9.5          # 基準日・在籍校欄（卒業年月）の数字はこの大きさでそろえる
 NARROW_NUM_SIZE = 8.0    # 2列分の欄（生年の和暦・満年齢・卒業月・職歴の月・日付の日）
 WIDE_NUM_SIZE = 9.5      # 3列分の欄（生月・生日・年・月）
+
+
+# Excel版の「入力」シートでは、志望の動機・希望の職種・アピールポイントを1つの欄にまとめる
+# （用紙では見出しなしで続けて印字するため、分けて入力する意味がない）
+MERGED_INTO_MOTIVATION = ("desired_job", "appeal")
+MOTIVATION_LABEL = "志望の動機・希望の職種・アピールポイント"
+MOTIVATION_WIDTH = 64.0
+
+
+def columns():
+    """「入力」シートの列（まとめた分を反映したもの）。"""
+    from dataclasses import replace
+
+    cols = []
+    for col in _all_columns():
+        if col.key in MERGED_INTO_MOTIVATION:
+            continue
+        if col.key == "motivation":
+            col = replace(col, label=MOTIVATION_LABEL, width=MOTIVATION_WIDTH,
+                          group="志望の動機", note="改行（Alt+Enter）で続けて書けます")
+        cols.append(col)
+    return cols
+
+
+def output_fields():
+    """「反映項目」シートに出す項目（まとめた分を反映したもの）。"""
+    out = []
+    for key, label, default in OUTPUT_FIELDS:
+        if key in MERGED_INTO_MOTIVATION:
+            continue
+        if key == "motivation":
+            label = MOTIVATION_LABEL
+        elif key == "contact":
+            label = "連絡先"
+        out.append((key, label, default))
+    return out
 
 
 # ------------------------------------------------------------------ 便利関数
@@ -153,7 +190,7 @@ def master_lookup(name_ref: str) -> str:
 
 def field_cell(key: str) -> str:
     """「反映項目」シートで、その項目の○×セル（例: $B$4）を返す。"""
-    for i, (field_key, _label, _default) in enumerate(OUTPUT_FIELDS, start=4):
+    for i, (field_key, _label, _default) in enumerate(output_fields(), start=4):
         if field_key == key:
             return f"{FIELDS}!$B${i}"
     raise KeyError(key)
@@ -354,9 +391,12 @@ def build_roster(wb, students: list[dict] | None) -> None:
     hints = {
         "birth": ("生年月日", "2008/5/12 と入れてください。元号と満○歳は自動です。"),
         "zip": ("郵便番号", "5980001 のように7桁でOK。住所のふりがなが自動で入ります。"),
-        "contact_address": ("連絡先", "空欄にすると、履歴書には「同上」と入ります。"),
+        "contact_address": ("連絡先", "現住所と違うときだけ入れてください。無記入なら空欄で印刷されます。"),
         "license.1.ym": ("取得年月", "令和6年6月 / 2024/6 / 2024/6/10 のどれでもOKです。"),
         "activities": ("校内外の諸活動", "改行（Alt+Enter）で箇条書きにできます。"),
+        "motivation": (MOTIVATION_LABEL,
+                       "志望の動機・希望の職種・アピールポイントを続けて書きます。"
+                       "改行は Alt+Enter。用紙には見出しなしでそのまま印字されます。"),
     }
     for key, (title, message) in hints.items():
         dv = DataValidation(type=None, allow_blank=True, showInputMessage=True,
@@ -463,7 +503,7 @@ def build_fields(wb) -> None:
         cell.font = Font(size=10, bold=True)
     dv = DataValidation(type="list", formula1='"○,×"', allow_blank=True)
     ws.add_data_validation(dv)
-    for i, (key, label, default) in enumerate(OUTPUT_FIELDS, start=4):
+    for i, (key, label, default) in enumerate(output_fields(), start=4):
         ws.cell(row=i, column=1, value=label)
         cell = ws.cell(row=i, column=2, value="○" if default else "×")
         cell.fill, cell.alignment = input_fill, Alignment(horizontal="center")
@@ -963,7 +1003,7 @@ Private Function 収まる大きさ(ByVal 対象 As Range) As Double
     収まる大きさ = MAX_PT
     v = 対象.Cells(1, 1).Value
     If IsError(v) Then Exit Function
-    s = CStr(v)
+    s = 末尾を落とす(CStr(v))
     If Len(s) = 0 Then Exit Function
 
     高さ = 対象.Height - YOHAKU
@@ -977,6 +1017,21 @@ Private Function 収まる大きさ(ByVal 対象 As Range) As Double
         pt = pt - STEP_PT
     Loop
     収まる大きさ = pt
+End Function
+
+' 末尾の空行・空白を落とす（あると、その分だけ文字が小さくなってしまう）
+Private Function 末尾を落とす(s As String) As String
+    Dim t As String
+    t = s
+    Do While Len(t) > 0
+        Select Case Right$(t, 1)
+            Case vbLf, vbCr, " ", ChrW(12288)
+                t = Left$(t, Len(t) - 1)
+            Case Else
+                Exit Do
+        End Select
+    Loop
+    末尾を落とす = t
 End Function
 
 ' 同じ幅・同じフォントで Excel に折り返させ、必要な高さ(pt)を実測する
@@ -1190,7 +1245,7 @@ def build_guide(wb) -> None:
     for i, text in enumerate([
         "生年月日は 2008/5/12 と入れるだけ　→　元号と満○歳は自動",
         "郵便番号を入れるだけ　→　住所のふりがなが自動（直したいときは上から書けばOK）",
-        "連絡先を空欄にする　→　履歴書には「同上」",
+        "連絡先は、記入がなければ空欄のままでOK",
         "学科はドロップダウンから選ぶ（空欄なら「設定」の学科）",
     ], start=7):
         put(i, "　・" + text, body)
@@ -1263,32 +1318,33 @@ def fill_form(ws, i: int, offset: int = 0, *, license_size=None) -> None:
 
     set_cell(ws, shift(CONTACT_ZIP_CELL, offset), calc("K"), size=BODY_FONT_SIZE)
     set_cell(ws, shift(CONTACT_CELL, offset), calc("L"), size=BODY_FONT_SIZE,
-             align="center", wrap=True)
+             wrap=True, indent=1)
     set_cell(ws, shift(CONTACT_KANA_CELL, offset), calc("M"), size=9, indent=1)
 
     set_cell(ws, shift(SCHOOL_CELL, offset), calc("N"), size=BODY_FONT_SIZE, wrap=True)
 
-    # 名簿が空の行（使っていない生徒）は、日付や卒業年月も出さない
-    used = f"{CALC}!$B${row}"
+    # 名簿が空の行（使っていない生徒）は、日付や卒業年月も出さない。
+    # 「反映項目」で氏名を×にしても消えないよう、判定は入力シートの氏名で行う。
+    used = f"{ROSTER}!${roster_col('name')}${ROSTER_FIRST_ROW + i - 1}"
 
     def only_if_used(formula: str) -> str:
         return f'=IF({used}="","",{formula})&""'
 
     set_cell(ws, shift(GRAD_YEAR_CELL, offset), only_if_used(f"{SETTINGS}!$B$6"),
-             align="center", size=WIDE_NUM_SIZE)
+             align="center", size=DATE_NUM_SIZE)
     set_cell(ws, shift(GRAD_MONTH_CELL, offset), only_if_used(f"{SETTINGS}!$B$7"),
-             align="center", size=NARROW_NUM_SIZE)
+             align="center", size=DATE_NUM_SIZE)
 
     base = f"{SETTINGS}!$B$3"
     set_cell(ws, shift(TODAY_YEAR_CELL, offset),
              only_if_used(f'IF(N({base})=0,"",YEAR({base})-2018)'),
-             align="center", size=WIDE_NUM_SIZE)
+             align="center", size=DATE_NUM_SIZE)
     set_cell(ws, shift(TODAY_MONTH_CELL, offset),
              only_if_used(f'IF(N({base})=0,"",MONTH({base}))'),
-             align="center", size=WIDE_NUM_SIZE)
+             align="center", size=DATE_NUM_SIZE)
     set_cell(ws, shift(TODAY_DAY_CELL, offset),
              only_if_used(f'IF(N({base})=0,"",DAY({base}))'),
-             align="center", size=NARROW_NUM_SIZE)
+             align="center", size=DATE_NUM_SIZE)
 
     # 資格は「取得年月」「名称」それぞれ1つの高いセルに、改行でつないで流し込む。
     # 行の高さを触らないので様式は崩れず、文字の大きさだけで件数に対応できる。
@@ -1477,11 +1533,9 @@ def build_calc(wb) -> None:
                 f'IF({ref("address_kana")}<>"",{ref("address_kana")},'
                 f'IF({ref("zip")}="","",{lookup})))')
         put(11, guard("contact", zip_fmt(ref("contact_zip")), f'{ref("contact_zip")}=""'))
-        put(12, f'=IF({field_cell("contact")}="×","",'
-                f'IF(AND({ref("contact_zip")}="",{ref("contact_address")}=""),"同上",'
-                f'IF({ref("contact_address")}="","",{ref("contact_address")})))')
-        put(13, f'=IF(OR({field_cell("contact")}="×",{ref("contact_kana")}="",'
-                f'AND({ref("contact_zip")}="",{ref("contact_address")}="")),"",{ref("contact_kana")})')
+        # 連絡先は、入力がなければ空欄のままにする（「同上」は入れない）
+        put(12, guard("contact", ref("contact_address")))
+        put(13, guard("contact", ref("contact_kana")))
         put(14, f'={SETTINGS}!$B$4&CHAR(10)&IF({ref("course")}="",{SETTINGS}!$B$5,{ref("course")})')
 
         for k in range(1, CALC_LICENSE_MAX + 1):
@@ -1493,12 +1547,7 @@ def build_calc(wb) -> None:
                          f'IFERROR(INDEX({GATHER}!$E${top}:$E${bottom},{rank}),""))')
 
         put(CALC_AFTER_LICENSE, guard("activities", ref("activities")))
-        put(CALC_AFTER_LICENSE + 1, f'=IF({field_cell("motivation")}="×","",'
-                f'IF({ref("motivation")}="","",{ref("motivation")}&CHAR(10)))'
-                f'&IF({field_cell("desired_job")}="×","",'
-                f'IF({ref("desired_job")}="","",{ref("desired_job")}&CHAR(10)))'
-                f'&IF({field_cell("appeal")}="×","",'
-                f'IF({ref("appeal")}="","",{ref("appeal")}))')
+        put(CALC_AFTER_LICENSE + 1, guard("motivation", ref("motivation")))
         put(CALC_AFTER_LICENSE + 2, guard("remarks", ref("remarks")))
 
         work = CALC_AFTER_LICENSE + 10         # 作業列（生年月日・職歴年月）
@@ -1753,6 +1802,9 @@ def main(argv: list[str] | None = None) -> int:
                     s[key] = _as_date(value)
         for s, course in zip(students, (COURSE_LIST[2], COURSE_LIST[0], COURSE_LIST[4])):
             s["course"] = course
+        for s in students:          # 志望の動機・希望の職種・アピールポイントは1つの欄にまとめる
+            parts = [s.pop(k, "") for k in ("motivation",) + MERGED_INTO_MOTIVATION]
+            s["motivation"] = "\n".join(x for x in parts if x)
 
     paste = None
     if args.with_sample:
