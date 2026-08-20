@@ -21,7 +21,11 @@ Private Const STUDENT_COUNT As Long = 40     ' 名簿の人数
 Private Const MAX_PT As Double = 11.0    ' 基本（最大）の文字の大きさ
 Private Const MIN_PT As Double = 6         ' これより小さくはしない
 Private Const STEP_PT As Double = 0.5      ' 大きさの刻み
-Private Const YOHAKU As Double = 2         ' 欄の高さに対する余裕(pt)
+Private Const YOHAKU As Double = 4         ' 欄の高さに対する余裕(pt)
+' 画面と印刷では文字幅の丸め方がわずかに違い、印刷のときだけ
+' 1行ぶん多く折り返して欄からはみ出すことがある。
+' そこで、測るときは欄の幅を少し狭いものとして扱い、余裕を持たせる。
+Private Const SAFE_W As Double = 0.94      ' 測定に使う幅の割合
 
 Private ws測定 As Worksheet
 Private 測定幅 As Double
@@ -129,7 +133,7 @@ Private Function 収まる大きさ(ByVal 対象 As Range, ByVal 基準 As Double) As Doub
     If Len(s) = 0 Then Exit Function
 
     高さ = 対象.Height - YOHAKU
-    幅 = 対象.Width
+    幅 = 対象.Width * SAFE_W
     フォント = 対象.Cells(1, 1).Font.Name
     字下げ = 対象.Cells(1, 1).IndentLevel
 
