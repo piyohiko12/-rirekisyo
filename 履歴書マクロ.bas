@@ -123,7 +123,7 @@ End Sub
 ' 欄に文章がちょうど収まる文字の大きさを返す（基準より大きくはしない）
 Private Function 収まる大きさ(ByVal 対象 As Range, ByVal 基準 As Double) As Double
     Dim v As Variant, s As String
-    Dim pt As Double, 高さ As Double, 幅 As Double
+    Dim pt As Double, 高さ As Double, 幅 As Double, 必要 As Double
     Dim フォント As String, 字下げ As Long
 
     収まる大きさ = 基準
@@ -139,7 +139,12 @@ Private Function 収まる大きさ(ByVal 対象 As Range, ByVal 基準 As Double) As Doub
 
     pt = 基準
     Do While pt > MIN_PT
-        If 測る(s, 幅, フォント, pt, 字下げ) <= 高さ Then Exit Do
+        必要 = 測る(s, 幅, フォント, pt, 字下げ)
+        If 必要 <= 高さ Then Exit Do
+        ' すでに1行なら、これ以上小さくしても折り返しは減らない。
+        ' 用紙には1行ぶんより低い欄（連絡先の住所など）があるので、
+        ' そこで無意味に小さくならないようにする。
+        If 必要 <= 測る("あ", 幅, フォント, pt, 字下げ) + 0.5 Then Exit Do
         pt = pt - STEP_PT
     Loop
     収まる大きさ = pt
