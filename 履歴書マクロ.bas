@@ -21,16 +21,21 @@ Private Const STUDENT_COUNT As Long = 40     ' 名簿の人数
 Private Const MAX_PT As Double = 11.0    ' 基本（最大）の文字の大きさ
 Private Const MIN_PT As Double = 6         ' これより小さくはしない
 Private Const STEP_PT As Double = 0.5      ' 大きさの刻み
-Private Const YOHAKU As Double = 4         ' 欄の高さに対する余裕(pt)
+Private Const YOHAKU As Double = 2         ' 欄の高さに対する余裕(pt)
 ' 画面と印刷では文字幅の丸め方がわずかに違い、印刷のときだけ
 ' 1行ぶん多く折り返して欄からはみ出すことがある。
 ' そこで、測るときは欄の幅を少し狭いものとして扱い、余裕を持たせる。
 ' Excelは結合セルに必要な高さを教えてくれないので、測定用のセルで代用している。
 ' 実際の印刷は、測った値より多くの高さを必要とすることがあるため余裕を持たせる。
 ' 文章の欄（折り返しで行数が決まる）は、ずれが行数ぶん積み上がるので余裕を大きくする。
-Private Const SAFE_W As Double = 0.97      ' 測定に使う幅の割合
-Private Const MASHI As Double = 1.05       ' 高さの割り増し（改行で行数が決まる欄）
-Private Const MASHI2 As Double = 1.20      ' 高さの割り増し（文章の欄）
+Private Const SAFE_W As Double = 0.98      ' 測定に使う幅の割合
+' 高さの割り増し。大きくすると早く小さくなり、小さくすると 11pt のまま粘る。
+' 割り増しは行数に比例するので、文章が短いうちは 11pt のままになる。
+Private Const MASHI As Double = 1#         ' ふつうの欄（資格等・諸活動・備考など）
+Private Const MASHI2 As Double = 1.08      ' 志望の動機（行数が多く、ずれが出やすい）
+
+Private Const SHEET_ROSTER As String = "入力"
+Private Const ROSTER_ROW1 As Long = 5   ' 名簿の1人目の行
 
 Private ws測定 As Worksheet
 Private 測定幅 As Double
@@ -64,30 +69,32 @@ Public Function 文字を整える実行() As Boolean
 
     ' --- 資格等。幅ごとにまとめて測ると速い（測定用の列幅を作り直さずに済む）
     For i = 1 To STUDENT_COUNT
-        pt年月(i) = 収まる大きさ(欄(frm, i, 9, 29, 75, 85), MAX_PT, False)
+        pt年月(i) = 収まる大きさ(欄(frm, i, 9, 29, 75, 85), MAX_PT, MASHI)
     Next i
     For i = 1 To STUDENT_COUNT
-        pt名称(i) = 収まる大きさ(欄(frm, i, 9, 29, 86, 125), MAX_PT, False)
+        pt名称(i) = 収まる大きさ(欄(frm, i, 9, 29, 86, 125), MAX_PT, MASHI)
     Next i
     ' 取得年月と名称は、行がずれないよう小さいほうにそろえる
     For i = 1 To STUDENT_COUNT
         pt = pt年月(i)
         If pt名称(i) < pt Then pt = pt名称(i)
+        If 手動サイズ(i, 33) > 0 Then _
+            pt = 手動サイズ(i, 33)
         欄(frm, i, 9, 29, 75, 85).Font.Size = pt
         欄(frm, i, 9, 29, 86, 125).Font.Size = pt
     Next i
 
     ' --- そのほかの欄。欄ごとに「もとの大きさ」から下げていく
-    欄をそろえる frm, 30, 46, 75, 125, MAX_PT, True     ' 校内外の諸活動
-    欄をそろえる frm, 47, 75, 75, 125, MAX_PT, True     ' 志望の動機ほか
-    欄をそろえる frm, 76, 87, 75, 125, MAX_PT, True     ' 備考
-    欄をそろえる frm, 15, 20, 12, 46, 16.0, False      ' 名前
-    欄をそろえる frm, 11, 14, 12, 46, 10.0, False      ' ふりがな（氏名）
-    欄をそろえる frm, 31, 33, 12, 61, MAX_PT, False     ' 現住所
-    欄をそろえる frm, 25, 27, 12, 61, 9.0, False       ' ふりがな（住所）
-    欄をそろえる frm, 40, 41, 12, 61, MAX_PT, False     ' 連絡先
-    欄をそろえる frm, 34, 36, 12, 61, 9.0, False       ' ふりがな（連絡先）
-    欄をそろえる frm, 54, 59, 25, 48, MAX_PT, False     ' 在籍校
+    欄をそろえる frm, 30, 46, 75, 125, MAX_PT, MASHI, 34   ' 校内外の諸活動
+    欄をそろえる frm, 47, 75, 75, 125, MAX_PT, MASHI2, 35  ' 志望の動機ほか
+    欄をそろえる frm, 76, 87, 75, 125, MAX_PT, MASHI, 36   ' 備考
+    欄をそろえる frm, 15, 20, 12, 46, 16.0, MASHI, 0    ' 名前
+    欄をそろえる frm, 11, 14, 12, 46, 10.0, MASHI, 0    ' ふりがな（氏名）
+    欄をそろえる frm, 31, 33, 12, 61, MAX_PT, MASHI, 0    ' 現住所
+    欄をそろえる frm, 25, 27, 12, 61, 9.0, MASHI, 0    ' ふりがな（住所）
+    欄をそろえる frm, 40, 41, 12, 61, MAX_PT, MASHI, 0    ' 連絡先
+    欄をそろえる frm, 34, 36, 12, 61, 9.0, MASHI, 0    ' ふりがな（連絡先）
+    欄をそろえる frm, 54, 59, 25, 48, MAX_PT, MASHI, 0    ' 在籍校
 
     測定終了
     元シート.Activate
@@ -116,21 +123,38 @@ Private Function 欄(frm As Worksheet, i As Long, _
 End Function
 
 ' 同じ欄を全員分そろえる（幅が同じものをまとめて測るので速い）
+' 手動列（「入力」シートの列番号。0なら手動指定なし）に数字があればそれを使う。
 Private Sub 欄をそろえる(frm As Worksheet, 上 As Long, 下 As Long, _
-                         左 As Long, 右 As Long, 基準 As Double, 文章 As Boolean)
-    Dim i As Long, 対象 As Range
+                         左 As Long, 右 As Long, 基準 As Double, _
+                         割増 As Double, 手動列 As Long)
+    Dim i As Long, 対象 As Range, pt As Double
     For i = 1 To STUDENT_COUNT
         Set 対象 = 欄(frm, i, 上, 下, 左, 右)
-        対象.Font.Size = 収まる大きさ(対象, 基準, 文章)
+        pt = 手動サイズ(i, 手動列)
+        If pt = 0 Then pt = 収まる大きさ(対象, 基準, 割増)
+        対象.Font.Size = pt
     Next i
 End Sub
 
+' 「入力」シートの手動サイズ。空欄や範囲外なら 0（＝自動）を返す。
+Private Function 手動サイズ(i As Long, 手動列 As Long) As Double
+    Dim v As Variant
+    手動サイズ = 0
+    If 手動列 <= 0 Then Exit Function
+    On Error Resume Next
+    v = ThisWorkbook.Worksheets(SHEET_ROSTER).Cells(ROSTER_ROW1 + i - 1, 手動列).Value
+    On Error GoTo 0
+    If IsNumeric(v) Then
+        If v >= MIN_PT And v <= 24 Then 手動サイズ = CDbl(v)
+    End If
+End Function
+
 ' 欄に文章がちょうど収まる文字の大きさを返す（基準より大きくはしない）
 Private Function 収まる大きさ(ByVal 対象 As Range, ByVal 基準 As Double, _
-                              ByVal 文章 As Boolean) As Double
+                              ByVal 割増 As Double) As Double
     Dim v As Variant, s As String
     Dim pt As Double, 高さ As Double, 幅 As Double
-    Dim 必要 As Double, 一行 As Double, 割増 As Double
+    Dim 必要 As Double, 一行 As Double
     Dim フォント As String, 字下げ As Long
 
     収まる大きさ = 基準
@@ -141,7 +165,6 @@ Private Function 収まる大きさ(ByVal 対象 As Range, ByVal 基準 As Double, _
 
     高さ = 対象.Height - YOHAKU
     幅 = 対象.Width * SAFE_W
-    If 文章 Then 割増 = MASHI2 Else 割増 = MASHI
     フォント = 対象.Cells(1, 1).Font.Name
     字下げ = 対象.Cells(1, 1).IndentLevel
 

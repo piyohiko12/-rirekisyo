@@ -153,9 +153,21 @@ MOTIVATION_LABEL = "志望の動機・希望の職種・アピールポイント
 MOTIVATION_WIDTH = 64.0
 
 
+# 自動調整をやめて手動で決めたいとき用の列（空欄なら自動）
+MANUAL_SIZE_GROUP = "文字サイズ（手動・空欄なら自動）"
+MANUAL_SIZE_COLS = (
+    ("size.licenses", "資格等"),
+    ("size.activities", "校内外の諸活動"),
+    ("size.motivation", "志望の動機"),
+    ("size.remarks", "備考"),
+)
+
+
 def columns():
-    """「入力」シートの列（まとめた分を反映したもの）。"""
+    """「入力」シートの列（まとめた分・手動サイズの列を反映したもの）。"""
     from dataclasses import replace
+
+    from rirekisho.inputs import Column
 
     cols = []
     for col in _all_columns():
@@ -165,6 +177,9 @@ def columns():
             col = replace(col, label=MOTIVATION_LABEL, width=MOTIVATION_WIDTH,
                           group="志望の動機", note="改行（Alt+Enter）で続けて書けます")
         cols.append(col)
+    for key, label in MANUAL_SIZE_COLS:
+        cols.append(Column(label, key, 14.0, MANUAL_SIZE_GROUP,
+                           "空欄なら自動。6〜16の数字を入れるとその大きさで固定します"))
     return cols
 
 
@@ -398,6 +413,7 @@ def build_roster(wb, students: list[dict] | None) -> None:
 
     group_columns("license.1.name", f"license.{LICENSE_SLOTS}.ym", collapsed=False)
     group_columns("job.1.ym", "job.2.text", collapsed=True)
+    group_columns(MANUAL_SIZE_COLS[0][0], MANUAL_SIZE_COLS[-1][0], collapsed=True)
     ws.sheet_properties.outlinePr.summaryRight = True
 
     # 名前が入っていない行は薄いグレーにして、使っていないことを分かるようにする。
@@ -421,6 +437,17 @@ def build_roster(wb, students: list[dict] | None) -> None:
                        "志望の動機・希望の職種・アピールポイントを続けて書きます。"
                        "改行は Alt+Enter。用紙には見出しなしでそのまま印字されます。"),
     }
+    size_dv = DataValidation(type="decimal", operator="between", formula1=6, formula2=16,
+                             allow_blank=True, showInputMessage=True, showErrorMessage=True,
+                             promptTitle="文字の大きさ（手動）",
+                             prompt="空欄なら自動で調整します。6〜16の数字を入れると、"
+                                    "その大きさで固定します（マクロを入れている場合）。",
+                             errorTitle="文字の大きさ", error="6〜16 の数字を入れてください")
+    ws.add_data_validation(size_dv)
+    for key, _label in MANUAL_SIZE_COLS:
+        letter = roster_col(key)
+        size_dv.add(f"{letter}{ROSTER_FIRST_ROW}:{letter}{last_row}")
+
     for key, (title, message) in hints.items():
         dv = DataValidation(type=None, allow_blank=True, showInputMessage=True,
                             promptTitle=title, prompt=message)
@@ -929,16 +956,21 @@ Private Const STUDENT_COUNT As Long = {STUDENTS}     ' 名簿の人数
 Private Const MAX_PT As Double = {BODY_FONT_SIZE}    ' 基本（最大）の文字の大きさ
 Private Const MIN_PT As Double = 6         ' これより小さくはしない
 Private Const STEP_PT As Double = 0.5      ' 大きさの刻み
-Private Const YOHAKU As Double = 4         ' 欄の高さに対する余裕(pt)
+Private Const YOHAKU As Double = 2         ' 欄の高さに対する余裕(pt)
 ' 画面と印刷では文字幅の丸め方がわずかに違い、印刷のときだけ
 ' 1行ぶん多く折り返して欄からはみ出すことがある。
 ' そこで、測るときは欄の幅を少し狭いものとして扱い、余裕を持たせる。
 ' Excelは結合セルに必要な高さを教えてくれないので、測定用のセルで代用している。
 ' 実際の印刷は、測った値より多くの高さを必要とすることがあるため余裕を持たせる。
 ' 文章の欄（折り返しで行数が決まる）は、ずれが行数ぶん積み上がるので余裕を大きくする。
-Private Const SAFE_W As Double = 0.97      ' 測定に使う幅の割合
-Private Const MASHI As Double = 1.05       ' 高さの割り増し（改行で行数が決まる欄）
-Private Const MASHI2 As Double = 1.20      ' 高さの割り増し（文章の欄）
+Private Const SAFE_W As Double = 0.98      ' 測定に使う幅の割合
+' 高さの割り増し。大きくすると早く小さくなり、小さくすると 11pt のまま粘る。
+' 割り増しは行数に比例するので、文章が短いうちは 11pt のままになる。
+Private Const MASHI As Double = 1#         ' ふつうの欄（資格等・諸活動・備考など）
+Private Const MASHI2 As Double = 1.08      ' 志望の動機（行数が多く、ずれが出やすい）
+
+Private Const SHEET_ROSTER As String = "{ROSTER}"
+Private Const ROSTER_ROW1 As Long = {ROSTER_FIRST_ROW}   ' 名簿の1人目の行
 
 Private ws測定 As Worksheet
 Private 測定幅 As Double
@@ -972,30 +1004,32 @@ Public Function 文字を整える実行() As Boolean
 
     ' --- 資格等。幅ごとにまとめて測ると速い（測定用の列幅を作り直さずに済む）
     For i = 1 To STUDENT_COUNT
-        pt年月(i) = 収まる大きさ(欄(frm, i, {ym}), MAX_PT, False)
+        pt年月(i) = 収まる大きさ(欄(frm, i, {ym}), MAX_PT, MASHI)
     Next i
     For i = 1 To STUDENT_COUNT
-        pt名称(i) = 収まる大きさ(欄(frm, i, {name}), MAX_PT, False)
+        pt名称(i) = 収まる大きさ(欄(frm, i, {name}), MAX_PT, MASHI)
     Next i
     ' 取得年月と名称は、行がずれないよう小さいほうにそろえる
     For i = 1 To STUDENT_COUNT
         pt = pt年月(i)
         If pt名称(i) < pt Then pt = pt名称(i)
+        If 手動サイズ(i, {roster_index("size.licenses")}) > 0 Then _
+            pt = 手動サイズ(i, {roster_index("size.licenses")})
         欄(frm, i, {ym}).Font.Size = pt
         欄(frm, i, {name}).Font.Size = pt
     Next i
 
     ' --- そのほかの欄。欄ごとに「もとの大きさ」から下げていく
-    欄をそろえる frm, {vba_box(ACTIVITIES_CELL)}, MAX_PT, True     ' 校内外の諸活動
-    欄をそろえる frm, {vba_box(MOTIVATION_CELL)}, MAX_PT, True     ' 志望の動機ほか
-    欄をそろえる frm, {vba_box(REMARKS_CELL)}, MAX_PT, True     ' 備考
-    欄をそろえる frm, {vba_box(NAME_CELL)}, {NAME_SIZE}, False      ' 名前
-    欄をそろえる frm, {vba_box(NAME_KANA_CELL)}, {NAME_KANA_SIZE}, False      ' ふりがな（氏名）
-    欄をそろえる frm, {vba_box(ADDR_CELL)}, MAX_PT, False     ' 現住所
-    欄をそろえる frm, {vba_box(ADDR_KANA_CELL)}, {KANA_SIZE}, False       ' ふりがな（住所）
-    欄をそろえる frm, {vba_box(CONTACT_CELL)}, MAX_PT, False     ' 連絡先
-    欄をそろえる frm, {vba_box(CONTACT_KANA_CELL)}, {KANA_SIZE}, False       ' ふりがな（連絡先）
-    欄をそろえる frm, {vba_box(SCHOOL_CELL)}, MAX_PT, False     ' 在籍校
+    欄をそろえる frm, {vba_box(ACTIVITIES_CELL)}, MAX_PT, MASHI, {roster_index("size.activities")}   ' 校内外の諸活動
+    欄をそろえる frm, {vba_box(MOTIVATION_CELL)}, MAX_PT, MASHI2, {roster_index("size.motivation")}  ' 志望の動機ほか
+    欄をそろえる frm, {vba_box(REMARKS_CELL)}, MAX_PT, MASHI, {roster_index("size.remarks")}   ' 備考
+    欄をそろえる frm, {vba_box(NAME_CELL)}, {NAME_SIZE}, MASHI, 0    ' 名前
+    欄をそろえる frm, {vba_box(NAME_KANA_CELL)}, {NAME_KANA_SIZE}, MASHI, 0    ' ふりがな（氏名）
+    欄をそろえる frm, {vba_box(ADDR_CELL)}, MAX_PT, MASHI, 0    ' 現住所
+    欄をそろえる frm, {vba_box(ADDR_KANA_CELL)}, {KANA_SIZE}, MASHI, 0    ' ふりがな（住所）
+    欄をそろえる frm, {vba_box(CONTACT_CELL)}, MAX_PT, MASHI, 0    ' 連絡先
+    欄をそろえる frm, {vba_box(CONTACT_KANA_CELL)}, {KANA_SIZE}, MASHI, 0    ' ふりがな（連絡先）
+    欄をそろえる frm, {vba_box(SCHOOL_CELL)}, MAX_PT, MASHI, 0    ' 在籍校
 
     測定終了
     元シート.Activate
@@ -1024,21 +1058,38 @@ Private Function 欄(frm As Worksheet, i As Long, _
 End Function
 
 ' 同じ欄を全員分そろえる（幅が同じものをまとめて測るので速い）
+' 手動列（「入力」シートの列番号。0なら手動指定なし）に数字があればそれを使う。
 Private Sub 欄をそろえる(frm As Worksheet, 上 As Long, 下 As Long, _
-                         左 As Long, 右 As Long, 基準 As Double, 文章 As Boolean)
-    Dim i As Long, 対象 As Range
+                         左 As Long, 右 As Long, 基準 As Double, _
+                         割増 As Double, 手動列 As Long)
+    Dim i As Long, 対象 As Range, pt As Double
     For i = 1 To STUDENT_COUNT
         Set 対象 = 欄(frm, i, 上, 下, 左, 右)
-        対象.Font.Size = 収まる大きさ(対象, 基準, 文章)
+        pt = 手動サイズ(i, 手動列)
+        If pt = 0 Then pt = 収まる大きさ(対象, 基準, 割増)
+        対象.Font.Size = pt
     Next i
 End Sub
 
+' 「入力」シートの手動サイズ。空欄や範囲外なら 0（＝自動）を返す。
+Private Function 手動サイズ(i As Long, 手動列 As Long) As Double
+    Dim v As Variant
+    手動サイズ = 0
+    If 手動列 <= 0 Then Exit Function
+    On Error Resume Next
+    v = ThisWorkbook.Worksheets(SHEET_ROSTER).Cells(ROSTER_ROW1 + i - 1, 手動列).Value
+    On Error GoTo 0
+    If IsNumeric(v) Then
+        If v >= MIN_PT And v <= 24 Then 手動サイズ = CDbl(v)
+    End If
+End Function
+
 ' 欄に文章がちょうど収まる文字の大きさを返す（基準より大きくはしない）
 Private Function 収まる大きさ(ByVal 対象 As Range, ByVal 基準 As Double, _
-                              ByVal 文章 As Boolean) As Double
+                              ByVal 割増 As Double) As Double
     Dim v As Variant, s As String
     Dim pt As Double, 高さ As Double, 幅 As Double
-    Dim 必要 As Double, 一行 As Double, 割増 As Double
+    Dim 必要 As Double, 一行 As Double
     Dim フォント As String, 字下げ As Long
 
     収まる大きさ = 基準
@@ -1049,7 +1100,6 @@ Private Function 収まる大きさ(ByVal 対象 As Range, ByVal 基準 As Doubl
 
     高さ = 対象.Height - YOHAKU
     幅 = 対象.Width * SAFE_W
-    If 文章 Then 割増 = MASHI2 Else 割増 = MASHI
     フォント = 対象.Cells(1, 1).Font.Name
     字下げ = 対象.Cells(1, 1).IndentLevel
 
@@ -1210,11 +1260,17 @@ MACRO_STEPS = [
     "　　以後、印刷・PDF出力の直前に自動で文字がそろいます。",
     "　　（E列は二重引用符を含まないので、コピー＆貼り付けでも壊れません）",
     "",
-    "■ それでも欄からはみ出すとき（余裕の量を変えられます）",
+    "■ 大きさを自分で決めたいとき（生徒ごと）",
+    "　　「入力」シートのいちばん右にある【文字サイズ（手動）】の列に数字を入れます。",
+    "　　　資格等／校内外の諸活動／志望の動機／備考 の4つを個別に指定できます。",
+    "　　　空欄なら自動。6〜16 の数字を入れると、その生徒だけその大きさで固定します。",
+    "　　　（ふだんは折りたたんであります。列の上の ＋ を押すと出てきます）",
+    "",
+    "■ 全体の効き方を変えたいとき",
     "　　C列の上のほうにある次の数値を変えて、もう一度読み込み直してください。",
-    "　　　MASHI2 … 文章の欄（諸活動・志望の動機・備考）の割り増し（既定 1.20）",
-    "　　　MASHI  … 資格などの欄の割り増し（既定 1.05）",
-    "　　　どちらも、大きくすると早く小さくなり、小さくすると 11pt のまま粘ります。",
+    "　　　MASHI2 … 志望の動機の割り増し（既定 1.08）",
+    "　　　MASHI  … そのほかの欄の割り増し（既定 1.00）",
+    "　　　大きくすると早く小さくなり、小さくすると 11pt のまま粘ります。",
     "",
     "■ そのほか確かめること",
     "・印刷の直前に、もう一度 ④ を実行してください（入力を変えたあとは必要です）。",
@@ -1328,8 +1384,9 @@ def build_guide(wb) -> None:
     put(25, "■ 文字が欄に入りきらないとき", head)
     put(26, "　「マクロ」シートの手順（1回だけ・3分）を行うと、資格・諸活動・志望の動機・備考の", body)
     put(27, "　文字の大きさが、欄に収まるよう自動でそろいます（最大11ポイント）。", body)
+    put(28, "　生徒ごとに決めたいときは、「入力」シート右端の【文字サイズ（手動）】に数字を入れます。", note)
 
-    put(29, "■ シートの役割", head)
+    put(30, "■ シートの役割", head)
     sheets = [
         (ROSTER, "生徒の情報を打ち込む（1行＝1生徒・40人分）"),
         (FORM_SHEET, "印刷する用紙。さわらなくて大丈夫です"),
@@ -1340,13 +1397,13 @@ def build_guide(wb) -> None:
         (MASTER, "資格名を正式名称に直す変換表"),
         (MACRO_SHEET, "文字の大きさをそろえる仕組みの入れかた"),
     ]
-    for i, (name, what) in enumerate(sheets, start=30):
+    for i, (name, what) in enumerate(sheets, start=31):
         ws.cell(row=i, column=1, value="　" + name).font = name_font
         ws.cell(row=i, column=2, value=what).font = body
 
-    put(39, "■ 印刷したあとに手で書き足すところ", head)
-    put(40, "　・写真を貼る", body)
-    put(41, "　・生年月日の「昭和・平成」、職歴の「平成・令和」に丸を付ける", body)
+    put(40, "■ 印刷したあとに手で書き足すところ", head)
+    put(41, "　・写真を貼る", body)
+    put(42, "　・生年月日の「昭和・平成」、職歴の「平成・令和」に丸を付ける", body)
 
     for col, width in (("A", 26), ("B", 30), ("C", 24), ("D", 26)):
         ws.column_dimensions[col].width = width
