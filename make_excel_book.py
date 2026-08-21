@@ -936,10 +936,9 @@ Private Const YOHAKU As Double = 4         ' 欄の高さに対する余裕(pt)
 ' Excelは結合セルに必要な高さを教えてくれないので、測定用のセルで代用している。
 ' 実際の印刷は、測った値より多くの高さを必要とすることがあるため余裕を持たせる。
 ' 文章の欄（折り返しで行数が決まる）は、ずれが行数ぶん積み上がるので余裕を大きくする。
-Private Const SAFE_W As Double = 0.94      ' 測定に使う幅の割合（改行で決まる欄）
-Private Const MASHI As Double = 1.05       ' 測った高さの割り増し（同上）
-Private Const SAFE_W2 As Double = 0.90     ' 測定に使う幅の割合（文章の欄）
-Private Const MASHI2 As Double = 1.15      ' 測った高さの割り増し（文章の欄）
+Private Const SAFE_W As Double = 0.97      ' 測定に使う幅の割合
+Private Const MASHI As Double = 1.05       ' 高さの割り増し（改行で行数が決まる欄）
+Private Const MASHI2 As Double = 1.20      ' 高さの割り増し（文章の欄）
 
 Private ws測定 As Worksheet
 Private 測定幅 As Double
@@ -1049,13 +1048,8 @@ Private Function 収まる大きさ(ByVal 対象 As Range, ByVal 基準 As Doubl
     If Len(s) = 0 Then Exit Function
 
     高さ = 対象.Height - YOHAKU
-    If 文章 Then
-        幅 = 対象.Width * SAFE_W2
-        割増 = MASHI2
-    Else
-        幅 = 対象.Width * SAFE_W
-        割増 = MASHI
-    End If
+    幅 = 対象.Width * SAFE_W
+    If 文章 Then 割増 = MASHI2 Else 割増 = MASHI
     フォント = 対象.Cells(1, 1).Font.Name
     字下げ = 対象.Cells(1, 1).IndentLevel
 
@@ -1067,9 +1061,9 @@ Private Function 収まる大きさ(ByVal 対象 As Range, ByVal 基準 As Doubl
         ' 用紙には1行ぶんより低い欄（連絡先の住所など）があるので、
         ' そこで無意味に小さくならないようにする。
         If 必要 <= 一行 + 0.5 Then Exit Do
-        ' 割り増しと1行ぶんの余裕をみて収まるなら、その大きさにする。
-        ' 画面で測った行数より印刷が増えることがあるため。
-        If 必要 * 割増 + 一行 <= 高さ Then Exit Do
+        ' 割り増しをみて収まるなら、その大きさにする。
+        ' 割り増しは行数に比例するので、文章が短いうちは 11pt のままになる。
+        If 必要 * 割増 <= 高さ Then Exit Do
         pt = pt - STEP_PT
     Loop
     収まる大きさ = pt
@@ -1218,8 +1212,9 @@ MACRO_STEPS = [
     "",
     "■ それでも欄からはみ出すとき（余裕の量を変えられます）",
     "　　C列の上のほうにある次の数値を変えて、もう一度読み込み直してください。",
-    "　　　SAFE_W2 … 文章の欄の幅を何割とみなすか（小さくするほど早く縮む・既定 0.90）",
-    "　　　MASHI2 … 測った高さの割り増し（大きくするほど早く縮む・既定 1.15）",
+    "　　　MASHI2 … 文章の欄（諸活動・志望の動機・備考）の割り増し（既定 1.20）",
+    "　　　MASHI  … 資格などの欄の割り増し（既定 1.05）",
+    "　　　どちらも、大きくすると早く小さくなり、小さくすると 11pt のまま粘ります。",
     "",
     "■ そのほか確かめること",
     "・印刷の直前に、もう一度 ④ を実行してください（入力を変えたあとは必要です）。",
