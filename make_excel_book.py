@@ -933,7 +933,13 @@ Private Const YOHAKU As Double = 4         ' 欄の高さに対する余裕(pt)
 ' 画面と印刷では文字幅の丸め方がわずかに違い、印刷のときだけ
 ' 1行ぶん多く折り返して欄からはみ出すことがある。
 ' そこで、測るときは欄の幅を少し狭いものとして扱い、余裕を持たせる。
-Private Const SAFE_W As Double = 0.94      ' 測定に使う幅の割合
+' Excelは結合セルに必要な高さを教えてくれないので、測定用のセルで代用している。
+' 実際の印刷は、測った値より多くの高さを必要とすることがあるため余裕を持たせる。
+' 文章の欄（折り返しで行数が決まる）は、ずれが行数ぶん積み上がるので余裕を大きくする。
+Private Const SAFE_W As Double = 0.94      ' 測定に使う幅の割合（改行で決まる欄）
+Private Const MASHI As Double = 1.05       ' 測った高さの割り増し（同上）
+Private Const SAFE_W2 As Double = 0.90     ' 測定に使う幅の割合（文章の欄）
+Private Const MASHI2 As Double = 1.15      ' 測った高さの割り増し（文章の欄）
 
 Private ws測定 As Worksheet
 Private 測定幅 As Double
@@ -967,10 +973,10 @@ Public Function 文字を整える実行() As Boolean
 
     ' --- 資格等。幅ごとにまとめて測ると速い（測定用の列幅を作り直さずに済む）
     For i = 1 To STUDENT_COUNT
-        pt年月(i) = 収まる大きさ(欄(frm, i, {ym}), MAX_PT)
+        pt年月(i) = 収まる大きさ(欄(frm, i, {ym}), MAX_PT, False)
     Next i
     For i = 1 To STUDENT_COUNT
-        pt名称(i) = 収まる大きさ(欄(frm, i, {name}), MAX_PT)
+        pt名称(i) = 収まる大きさ(欄(frm, i, {name}), MAX_PT, False)
     Next i
     ' 取得年月と名称は、行がずれないよう小さいほうにそろえる
     For i = 1 To STUDENT_COUNT
@@ -981,16 +987,16 @@ Public Function 文字を整える実行() As Boolean
     Next i
 
     ' --- そのほかの欄。欄ごとに「もとの大きさ」から下げていく
-    欄をそろえる frm, {vba_box(ACTIVITIES_CELL)}, MAX_PT     ' 校内外の諸活動
-    欄をそろえる frm, {vba_box(MOTIVATION_CELL)}, MAX_PT     ' 志望の動機ほか
-    欄をそろえる frm, {vba_box(REMARKS_CELL)}, MAX_PT     ' 備考
-    欄をそろえる frm, {vba_box(NAME_CELL)}, {NAME_SIZE}      ' 名前
-    欄をそろえる frm, {vba_box(NAME_KANA_CELL)}, {NAME_KANA_SIZE}      ' ふりがな（氏名）
-    欄をそろえる frm, {vba_box(ADDR_CELL)}, MAX_PT     ' 現住所
-    欄をそろえる frm, {vba_box(ADDR_KANA_CELL)}, {KANA_SIZE}       ' ふりがな（住所）
-    欄をそろえる frm, {vba_box(CONTACT_CELL)}, MAX_PT     ' 連絡先
-    欄をそろえる frm, {vba_box(CONTACT_KANA_CELL)}, {KANA_SIZE}       ' ふりがな（連絡先）
-    欄をそろえる frm, {vba_box(SCHOOL_CELL)}, MAX_PT     ' 在籍校
+    欄をそろえる frm, {vba_box(ACTIVITIES_CELL)}, MAX_PT, True     ' 校内外の諸活動
+    欄をそろえる frm, {vba_box(MOTIVATION_CELL)}, MAX_PT, True     ' 志望の動機ほか
+    欄をそろえる frm, {vba_box(REMARKS_CELL)}, MAX_PT, True     ' 備考
+    欄をそろえる frm, {vba_box(NAME_CELL)}, {NAME_SIZE}, False      ' 名前
+    欄をそろえる frm, {vba_box(NAME_KANA_CELL)}, {NAME_KANA_SIZE}, False      ' ふりがな（氏名）
+    欄をそろえる frm, {vba_box(ADDR_CELL)}, MAX_PT, False     ' 現住所
+    欄をそろえる frm, {vba_box(ADDR_KANA_CELL)}, {KANA_SIZE}, False       ' ふりがな（住所）
+    欄をそろえる frm, {vba_box(CONTACT_CELL)}, MAX_PT, False     ' 連絡先
+    欄をそろえる frm, {vba_box(CONTACT_KANA_CELL)}, {KANA_SIZE}, False       ' ふりがな（連絡先）
+    欄をそろえる frm, {vba_box(SCHOOL_CELL)}, MAX_PT, False     ' 在籍校
 
     測定終了
     元シート.Activate
@@ -1020,18 +1026,20 @@ End Function
 
 ' 同じ欄を全員分そろえる（幅が同じものをまとめて測るので速い）
 Private Sub 欄をそろえる(frm As Worksheet, 上 As Long, 下 As Long, _
-                         左 As Long, 右 As Long, 基準 As Double)
+                         左 As Long, 右 As Long, 基準 As Double, 文章 As Boolean)
     Dim i As Long, 対象 As Range
     For i = 1 To STUDENT_COUNT
         Set 対象 = 欄(frm, i, 上, 下, 左, 右)
-        対象.Font.Size = 収まる大きさ(対象, 基準)
+        対象.Font.Size = 収まる大きさ(対象, 基準, 文章)
     Next i
 End Sub
 
 ' 欄に文章がちょうど収まる文字の大きさを返す（基準より大きくはしない）
-Private Function 収まる大きさ(ByVal 対象 As Range, ByVal 基準 As Double) As Double
+Private Function 収まる大きさ(ByVal 対象 As Range, ByVal 基準 As Double, _
+                              ByVal 文章 As Boolean) As Double
     Dim v As Variant, s As String
-    Dim pt As Double, 高さ As Double, 幅 As Double, 必要 As Double
+    Dim pt As Double, 高さ As Double, 幅 As Double
+    Dim 必要 As Double, 一行 As Double, 割増 As Double
     Dim フォント As String, 字下げ As Long
 
     収まる大きさ = 基準
@@ -1041,18 +1049,27 @@ Private Function 収まる大きさ(ByVal 対象 As Range, ByVal 基準 As Doubl
     If Len(s) = 0 Then Exit Function
 
     高さ = 対象.Height - YOHAKU
-    幅 = 対象.Width * SAFE_W
+    If 文章 Then
+        幅 = 対象.Width * SAFE_W2
+        割増 = MASHI2
+    Else
+        幅 = 対象.Width * SAFE_W
+        割増 = MASHI
+    End If
     フォント = 対象.Cells(1, 1).Font.Name
     字下げ = 対象.Cells(1, 1).IndentLevel
 
     pt = 基準
     Do While pt > MIN_PT
         必要 = 測る(s, 幅, フォント, pt, 字下げ)
-        If 必要 <= 高さ Then Exit Do
+        一行 = 測る("あ", 幅, フォント, pt, 字下げ)
         ' すでに1行なら、これ以上小さくしても折り返しは減らない。
         ' 用紙には1行ぶんより低い欄（連絡先の住所など）があるので、
         ' そこで無意味に小さくならないようにする。
-        If 必要 <= 測る("あ", 幅, フォント, pt, 字下げ) + 0.5 Then Exit Do
+        If 必要 <= 一行 + 0.5 Then Exit Do
+        ' 割り増しと1行ぶんの余裕をみて収まるなら、その大きさにする。
+        ' 画面で測った行数より印刷が増えることがあるため。
+        If 必要 * 割増 + 一行 <= 高さ Then Exit Do
         pt = pt - STEP_PT
     Loop
     収まる大きさ = pt
@@ -1199,7 +1216,12 @@ MACRO_STEPS = [
     "　　以後、印刷・PDF出力の直前に自動で文字がそろいます。",
     "　　（E列は二重引用符を含まないので、コピー＆貼り付けでも壊れません）",
     "",
-    "■ それでも欄からはみ出すとき",
+    "■ それでも欄からはみ出すとき（余裕の量を変えられます）",
+    "　　C列の上のほうにある次の数値を変えて、もう一度読み込み直してください。",
+    "　　　SAFE_W2 … 文章の欄の幅を何割とみなすか（小さくするほど早く縮む・既定 0.90）",
+    "　　　MASHI2 … 測った高さの割り増し（大きくするほど早く縮む・既定 1.15）",
+    "",
+    "■ そのほか確かめること",
     "・印刷の直前に、もう一度 ④ を実行してください（入力を変えたあとは必要です）。",
     "・印刷画面で「拡大縮小」が 97% になっているか確認してください。",
     "　プリンター側で「用紙に合わせる」が効いていると、文字の折り返しが変わります。",
